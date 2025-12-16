@@ -23,7 +23,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.macraid.compassfinancial"
+      "package": "com.compassfinancial"
     },
     "web": {
       "bundler": "metro",
