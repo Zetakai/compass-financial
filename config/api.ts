@@ -1,17 +1,28 @@
 /**
  * API Configuration
  * 
- * To use this app, you need to:
- * 1. Sign up at https://eodhistoricaldata.com/
- * 2. Get your free API key
- * 3. Set it as an environment variable or replace the default below
+ * We support two providers:
+ * 1. Finnhub (Recommended - Free tier includes WebSocket!)
+ *    - Sign up at https://finnhub.io/
+ *    - Free tier: 60 calls/min, WebSocket access included
+ * 
+ * 2. EODHD (May require paid plan for WebSocket)
+ *    - Sign up at https://eodhistoricaldata.com/
  * 
  * For production, use environment variables:
+ * - EXPO_PUBLIC_FINNHUB_API_KEY
  * - EXPO_PUBLIC_EODHD_API_KEY
  */
 
-// Get API key from environment variable or use default key
-// IMPORTANT: Replace with your actual API key from https://eodhistoricaldata.com/
+// Provider selection: 'finnhub' or 'eodhd'
+export const API_PROVIDER = (process.env.EXPO_PUBLIC_API_PROVIDER || 'finnhub') as 'finnhub' | 'eodhd';
+
+// Finnhub API Key (Recommended - Free tier includes WebSocket!)
+export const FINNHUB_API_KEY = 
+  process.env.EXPO_PUBLIC_FINNHUB_API_KEY || 
+  ''; // Get your free API key from https://finnhub.io/
+
+// EODHD API Key (May require paid plan for WebSocket)
 export const EODHD_API_KEY = 
   process.env.EXPO_PUBLIC_EODHD_API_KEY || 
   '32623626'; // Your EODHD API key

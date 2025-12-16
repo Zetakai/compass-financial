@@ -1,6 +1,7 @@
 /**
- * EODHD WebSocket Service
- * Documentation: https://eodhistoricaldata.com/financial-apis/real-time-data-api-via-websockets/
+ * Finnhub WebSocket Service
+ * Documentation: https://finnhub.io/docs/api#websocket-trades
+ * Free tier includes WebSocket access!
  */
 
 export interface StockPrice {
@@ -13,22 +14,25 @@ export interface StockPrice {
   close?: number;
 }
 
-export interface WebSocketMessage {
-  t: string; // timestamp
-  p: number; // price
-  v?: number; // volume
-  o?: number; // open
-  h?: number; // high
-  l?: number; // low
-  c?: number; // close
-  s: string; // symbol
+export interface FinnhubTradeMessage {
+  type: 'trade';
+  data: Array<{
+    s: string; // symbol
+    p: number; // price
+    t: number; // timestamp (milliseconds)
+    v: number; // volume
+  }>;
+}
+
+export interface FinnhubPingMessage {
+  type: 'ping';
 }
 
 type MessageCallback = (data: StockPrice) => void;
 type ErrorCallback = (error: Error) => void;
 type ConnectionCallback = () => void;
 
-class EODHDWebSocket {
+class FinnhubWebSocket {
   private ws: WebSocket | null = null;
   private apiKey: string;
   private symbols: string[] = [];
@@ -39,13 +43,14 @@ class EODHDWebSocket {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 3000;
   private isConnecting = false;
+  private pingInterval: NodeJS.Timeout | null = null;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
   }
 
   /**
-   * Connect to EODHD WebSocket
+   * Connect to Finnhub WebSocket
    * @param symbols Array of stock symbols (e.g., ['AAPL', 'MSFT'])
    */
   connect(symbols: string[]): Promise<void> {
@@ -58,15 +63,15 @@ class EODHDWebSocket {
       this.symbols = symbols;
       this.isConnecting = true;
 
-      // EODHD WebSocket URL
-      // Format: wss://ws.eodhistoricaldata.com/ws/us?api_token=YOUR_API_KEY
-      const wsUrl = `wss://ws.eodhistoricaldata.com/ws/us?api_token=${this.apiKey}`;
+      // Finnhub WebSocket URL
+      // Format: wss://ws.finnhub.io?token=YOUR_API_KEY
+      const wsUrl = `wss://ws.finnhub.io?token=${this.apiKey}`;
 
       try {
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-          console.log('EODHD WebSocket connected');
+          console.log('Finnhub WebSocket connected');
           this.isConnecting = false;
           this.reconnectAttempts = 0;
           
@@ -74,6 +79,9 @@ class EODHDWebSocket {
           setTimeout(() => {
             // Subscribe to symbols
             this.subscribe(symbols);
+            
+            // Start ping interval (Finnhub requires periodic pings)
+            this.startPingInterval();
             
             if (this.connectCallback) {
               this.connectCallback();
@@ -87,54 +95,35 @@ class EODHDWebSocket {
           try {
             const data = JSON.parse(event.data);
             
-            // Check if it's an error message from the server
-            if (data.error || data.message || data.status) {
-              const status = data.status || (data.error ? 500 : 200);
-              const errorMsg = data.error || data.message || 'Unknown error';
-              
-              console.error('EODHD WebSocket error message:', data);
-              
-              // 403 = Forbidden (authentication/authorization issue)
-              // 401 = Unauthorized (invalid API key)
-              if (status === 403 || status === 401) {
-                console.error('❌ Authentication failed. Your API key may not have WebSocket access.');
-                console.error('💡 Free tier API keys may not include WebSocket/real-time data access.');
-                console.error('💡 Please check your EODHD subscription plan or use REST API instead.');
-                
-                // Close connection and stop reconnecting
-                if (this.ws) {
-                  this.ws.close();
-                }
-                this.reconnectAttempts = this.maxReconnectAttempts; // Stop reconnecting
-                
-                if (this.errorCallback) {
-                  this.errorCallback(new Error(`Authentication failed (${status}): ${errorMsg}. Your API key may not have WebSocket access.`));
-                }
-                return;
-              }
-              
+            // Handle ping messages
+            if (data.type === 'ping') {
+              this.handlePing();
+              return;
+            }
+            
+            // Handle trade messages
+            if (data.type === 'trade' && data.data) {
+              this.handleTradeMessage(data as FinnhubTradeMessage);
+              return;
+            }
+            
+            // Handle error messages
+            if (data.type === 'error') {
+              console.error('Finnhub WebSocket error:', data);
               if (this.errorCallback) {
-                this.errorCallback(new Error(`${errorMsg} (Status: ${status})`));
+                this.errorCallback(new Error(data.msg || 'Unknown error'));
               }
               return;
             }
             
-            // Check if it's a subscription confirmation
-            if (data.action === 'subscribe' && data.status) {
-              console.log('Subscription status:', data.status, data.message || '');
-              return;
-            }
-            
-            // Handle price update message
-            const message: WebSocketMessage = data;
-            this.handleMessage(message);
+            console.log('Finnhub WebSocket message:', data);
           } catch (error) {
             console.error('Error parsing WebSocket message:', error, event.data);
           }
         };
 
         this.ws.onerror = (error) => {
-          console.error('EODHD WebSocket error:', error);
+          console.error('Finnhub WebSocket error:', error);
           this.isConnecting = false;
           
           if (this.errorCallback) {
@@ -144,23 +133,22 @@ class EODHDWebSocket {
         };
 
         this.ws.onclose = (event) => {
-          console.log('EODHD WebSocket closed', {
+          console.log('Finnhub WebSocket closed', {
             code: event.code,
             reason: event.reason,
             wasClean: event.wasClean,
           });
+          
+          this.stopPingInterval();
           this.isConnecting = false;
           this.ws = null;
           
-          // Don't reconnect if it was closed cleanly, due to authentication, or policy violation
-          // 1000 = Normal closure
-          // 1008 = Policy violation (often authentication)
-          // 1011 = Internal server error (often 403/401)
+          // Don't reconnect if it was closed cleanly or due to authentication
           if (event.code === 1000 || event.code === 1008 || event.code === 1011) {
-            if (event.code === 1011 && event.reason?.includes('403')) {
-              console.log('❌ Connection closed due to authentication failure (403). Not reconnecting.');
+            if (event.code === 1008 || (event.reason && event.reason.includes('403'))) {
+              console.log('❌ Connection closed due to authentication failure. Please check your API key.');
             } else {
-              console.log('WebSocket closed cleanly or due to policy violation. Not reconnecting.');
+              console.log('WebSocket closed cleanly. Not reconnecting.');
             }
             if (this.errorCallback && !event.wasClean) {
               this.errorCallback(new Error(event.reason || 'Connection closed'));
@@ -168,7 +156,7 @@ class EODHDWebSocket {
             return;
           }
           
-          // Only attempt to reconnect if we haven't hit max attempts and it wasn't an auth error
+          // Attempt to reconnect
           if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
@@ -191,20 +179,22 @@ class EODHDWebSocket {
 
   /**
    * Subscribe to stock symbols
+   * Finnhub format: {"type":"subscribe","symbol":"AAPL"}
    */
   private subscribe(symbols: string[]): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
 
-    // EODHD subscription format: {"action":"subscribe","symbols":"AAPL,MSFT"}
-    const subscribeMessage = {
-      action: 'subscribe',
-      symbols: symbols.join(','),
-    };
+    symbols.forEach((symbol) => {
+      const subscribeMessage = {
+        type: 'subscribe',
+        symbol: symbol,
+      };
 
-    this.ws.send(JSON.stringify(subscribeMessage));
-    console.log('Subscribed to symbols:', symbols);
+      this.ws!.send(JSON.stringify(subscribeMessage));
+      console.log('Subscribed to symbol:', symbol);
+    });
   }
 
   /**
@@ -215,34 +205,68 @@ class EODHDWebSocket {
       return;
     }
 
-    const unsubscribeMessage = {
-      action: 'unsubscribe',
-      symbols: symbols.join(','),
-    };
+    symbols.forEach((symbol) => {
+      const unsubscribeMessage = {
+        type: 'unsubscribe',
+        symbol: symbol,
+      };
 
-    this.ws.send(JSON.stringify(unsubscribeMessage));
+      this.ws!.send(JSON.stringify(unsubscribeMessage));
+    });
   }
 
   /**
-   * Handle incoming WebSocket messages
+   * Handle ping messages (Finnhub requires periodic pings)
    */
-  private handleMessage(message: WebSocketMessage): void {
-    const symbol = message.s;
-    const callbacks = this.messageCallbacks.get(symbol);
-
-    if (callbacks) {
-      const stockPrice: StockPrice = {
-        timestamp: parseInt(message.t) * 1000, // Convert to milliseconds
-        price: message.p,
-        volume: message.v,
-        open: message.o,
-        high: message.h,
-        low: message.l,
-        close: message.c,
-      };
-
-      callbacks.forEach((callback) => callback(stockPrice));
+  private handlePing(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'ping' }));
     }
+  }
+
+  /**
+   * Start ping interval to keep connection alive
+   */
+  private startPingInterval(): void {
+    this.stopPingInterval();
+    // Ping every 30 seconds
+    this.pingInterval = setInterval(() => {
+      this.handlePing();
+    }, 30000);
+  }
+
+  /**
+   * Stop ping interval
+   */
+  private stopPingInterval(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  /**
+   * Handle trade messages from Finnhub
+   */
+  private handleTradeMessage(message: FinnhubTradeMessage): void {
+    if (!message.data || !Array.isArray(message.data)) {
+      return;
+    }
+
+    message.data.forEach((trade) => {
+      const symbol = trade.s;
+      const callbacks = this.messageCallbacks.get(symbol);
+
+      if (callbacks) {
+        const stockPrice: StockPrice = {
+          timestamp: trade.t, // Already in milliseconds
+          price: trade.p,
+          volume: trade.v,
+        };
+
+        callbacks.forEach((callback) => callback(stockPrice));
+      }
+    });
   }
 
   /**
@@ -287,7 +311,12 @@ class EODHDWebSocket {
    * Disconnect from WebSocket
    */
   disconnect(): void {
+    this.stopPingInterval();
     if (this.ws) {
+      // Unsubscribe from all symbols before closing
+      if (this.symbols.length > 0) {
+        this.unsubscribe(this.symbols);
+      }
       this.ws.close();
       this.ws = null;
     }
@@ -304,17 +333,17 @@ class EODHDWebSocket {
 }
 
 // Singleton instance
-let wsInstance: EODHDWebSocket | null = null;
+let wsInstance: FinnhubWebSocket | null = null;
 
 /**
  * Get or create WebSocket instance
  */
-export function getEODHDWebSocket(apiKey: string): EODHDWebSocket {
+export function getFinnhubWebSocket(apiKey: string): FinnhubWebSocket {
   if (!wsInstance) {
-    wsInstance = new EODHDWebSocket(apiKey);
+    wsInstance = new FinnhubWebSocket(apiKey);
   }
   return wsInstance;
 }
 
-export default EODHDWebSocket;
+export default FinnhubWebSocket;
 

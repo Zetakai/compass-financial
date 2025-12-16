@@ -1,19 +1,19 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { useColorScheme } from '@/components/useColorScheme';
+import { API_PROVIDER, DEFAULT_SYMBOLS, EODHD_API_KEY, FINNHUB_API_KEY } from '@/config/api';
+import Colors from '@/constants/Colors';
+import { getEODHDWebSocket } from '@/services/eodhdWebSocket';
+import { getFinnhubWebSocket, StockPrice } from '@/services/finnhubWebSocket';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  StyleSheet,
-  View,
-  Text,
+  ActivityIndicator,
   ScrollView,
+  StyleSheet,
+  Text,
   TextInput,
   TouchableOpacity,
-  ActivityIndicator,
-  Platform,
+  View
 } from 'react-native';
 import { LineChart, LineChartProvider } from 'react-native-wagmi-charts';
-import { getEODHDWebSocket, StockPrice } from '@/services/eodhdWebSocket';
-import { EODHD_API_KEY, DEFAULT_SYMBOLS } from '@/config/api';
-import { useColorScheme } from '@/components/useColorScheme';
-import Colors from '@/constants/Colors';
 
 interface ChartData {
   timestamp: number;
@@ -34,7 +34,17 @@ export default function StockPricesScreen() {
 
   // Initialize WebSocket connection
   useEffect(() => {
-    const ws = getEODHDWebSocket(EODHD_API_KEY);
+    // Select provider based on config
+    const ws = API_PROVIDER === 'finnhub' 
+      ? getFinnhubWebSocket(FINNHUB_API_KEY)
+      : getEODHDWebSocket(EODHD_API_KEY);
+
+    // Check if API key is provided
+    if (API_PROVIDER === 'finnhub' && !FINNHUB_API_KEY) {
+      setError('Finnhub API key is required. Get your free key at https://finnhub.io/');
+      setIsLoading(false);
+      return;
+    }
 
     ws.onConnect(() => {
       setIsConnected(true);
@@ -95,7 +105,10 @@ export default function StockPricesScreen() {
       return;
     }
 
-    const ws = getEODHDWebSocket(EODHD_API_KEY);
+    const ws = API_PROVIDER === 'finnhub' 
+      ? getFinnhubWebSocket(FINNHUB_API_KEY)
+      : getEODHDWebSocket(EODHD_API_KEY);
+      
     if (ws.isConnected()) {
       ws.connect([symbol])
         .then(() => {
@@ -292,7 +305,10 @@ export default function StockPricesScreen() {
               <View style={styles.chartPriceContainer}>
                 <LineChart.PriceText
                   style={[styles.chartPriceText, { color: colors.text }]}
-                  format={({ value }) => `$${value.toFixed(2)}`}
+                  format={({ value }: { value: string; formatted: string }) => {
+                    const numValue = parseFloat(value);
+                    return `$${isNaN(numValue) ? '0.00' : numValue.toFixed(2)}`;
+                  }}
                 />
               </View>
             </LineChartProvider>
@@ -308,10 +324,12 @@ export default function StockPricesScreen() {
         {/* Info Section */}
         <View style={styles.infoContainer}>
           <Text style={[styles.infoText, { color: colors.text + '80' }]}>
-            Real-time stock prices powered by EODHD WebSocket API
+            Real-time stock prices powered by {API_PROVIDER === 'finnhub' ? 'Finnhub' : 'EODHD'} WebSocket API
           </Text>
           <Text style={[styles.infoText, { color: colors.text + '80' }]}>
-            Get your free API key at: https://eodhistoricaldata.com/
+            {API_PROVIDER === 'finnhub' 
+              ? 'Get your free API key at: https://finnhub.io/'
+              : 'Get your API key at: https://eodhistoricaldata.com/'}
           </Text>
         </View>
       </ScrollView>
