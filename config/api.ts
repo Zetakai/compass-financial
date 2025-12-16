@@ -25,7 +25,7 @@ export const FINNHUB_API_KEY =
 // EODHD API Key (May require paid plan for WebSocket)
 export const EODHD_API_KEY = 
   process.env.EXPO_PUBLIC_EODHD_API_KEY || 
-  '32623626'; // Your EODHD API key
+  ''; // Your EODHD API key
 
 // Default symbols to track
 export const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];

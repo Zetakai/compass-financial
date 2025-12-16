@@ -159,13 +159,17 @@ export default function StockPricesScreen() {
   }, [symbolInput, allSymbols]);
 
   // Filter chart data based on timeframe
-  // Note: Financial apps typically use REST API for historical data (hourly/daily/monthly/yearly)
-  // and WebSocket for real-time updates. This implementation filters real-time data.
-  // For production, consider fetching historical data from REST API endpoints.
+  // IMPORTANT: This chart is REAL-TIME ONLY - it only shows data collected since the app started.
+  // For proper historical data (1M, 1Y), you need to fetch from REST API endpoints.
+  // Financial apps typically:
+  // - Use REST API for historical data (hourly/daily/monthly/yearly charts)
+  // - Use WebSocket for real-time updates (tick-by-tick)
   const getFilteredChartData = (): ChartData[] => {
     const allData = priceData.get(selectedSymbol) || [];
     if (allData.length === 0) return [];
     
+    // For real-time data, we only have data since app started
+    // So longer timeframes (1M, 1Y) won't have much data
     const now = Date.now();
     let cutoffTime: number;
     
@@ -189,7 +193,15 @@ export default function StockPricesScreen() {
         return allData;
     }
     
-    return allData.filter((point) => point.timestamp >= cutoffTime);
+    const filtered = allData.filter((point) => point.timestamp >= cutoffTime);
+    
+    // If filtered data is empty but we have data, show all available data
+    // (this happens when timeframe is longer than app runtime)
+    if (filtered.length === 0 && allData.length > 0) {
+      return allData; // Show all available real-time data
+    }
+    
+    return filtered;
   };
 
   const chartData = getFilteredChartData();
@@ -398,12 +410,39 @@ export default function StockPricesScreen() {
           <View style={styles.chartContainer}>
             <LineChartProvider data={chartData} key={`${selectedSymbol}-${timeframe}`}>
               <LineChart height={300}>
+                {/* Y-Axis (Price) */}
+                <LineChart.Axis
+                  position="left"
+                  orientation="vertical"
+                  color={colorScheme === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'}
+                  textStyle={{
+                    color: colors.text + '80',
+                    fontSize: 10,
+                  }}
+                  tickCount={5}
+                />
+                
+                {/* X-Axis (Time) */}
+                <LineChart.Axis
+                  position="bottom"
+                  orientation="horizontal"
+                  color={colorScheme === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'}
+                  textStyle={{
+                    color: colors.text + '80',
+                    fontSize: 10,
+                  }}
+                  tickCount={5}
+                />
+                
+                {/* Chart Path */}
                 <LineChart.Path
                   color={isPositive ? '#4CAF50' : '#F44336'}
                   width={2}
                 >
                   <LineChart.Gradient />
                 </LineChart.Path>
+                
+                {/* Cursor and Tooltip */}
                 <LineChart.CursorCrosshair color={colors.tint}>
                   <LineChart.Tooltip
                     textStyle={{
@@ -421,6 +460,8 @@ export default function StockPricesScreen() {
                   />
                 </LineChart.CursorCrosshair>
               </LineChart>
+              
+              {/* Price and Time Display */}
               <View style={styles.chartPriceContainer}>
                 <LineChart.PriceText
                   style={[styles.chartPriceText, { color: colors.text }]}
@@ -440,7 +481,9 @@ export default function StockPricesScreen() {
         ) : (
           <View style={styles.noDataContainer}>
             <Text style={[styles.noDataText, { color: colors.text + '80' }]}>
-              Waiting for price data...
+              {chartData.length === 0 && priceData.get(selectedSymbol)?.length === 0
+                ? 'Waiting for price data...'
+                : `No data available for ${timeframe} timeframe. Chart shows real-time data only.`}
             </Text>
           </View>
         )}
