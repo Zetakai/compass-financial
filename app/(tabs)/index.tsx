@@ -3,7 +3,27 @@ import { API_PROVIDER, DEFAULT_SYMBOLS, EODHD_API_KEY, FINNHUB_API_KEY } from '@
 import Colors from '@/constants/Colors';
 import { getEODHDWebSocket } from '@/services/eodhdWebSocket';
 import { getFinnhubWebSocket, StockPrice } from '@/services/finnhubWebSocket';
-import React, { useCallback, useEffect, useState } from 'react';
+import { useGetHistoricalDataQuery } from '@/store/api/finnhubApi';
+import { useAppDispatch, useAppSelector } from '@/store/hooks';
+import {
+  ChartData,
+  setHistoricalData,
+  updateCurrentPrice,
+  updateRealtimeCandles,
+} from '@/store/slices/stockDataSlice';
+import {
+  addCustomSymbol,
+  setConnectionStatus,
+  setLoading,
+  setSelectedSymbol,
+  setTimeframe,
+  Timeframe,
+} from '@/store/slices/uiSlice';
+import {
+  mergeHistoricalAndRealtime,
+  updateCandleWithTick,
+} from '@/utils/candleUtils';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -11,97 +31,146 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { LineChart, LineChartProvider } from 'react-native-wagmi-charts';
 
-interface ChartData {
-  timestamp: number;
-  value: number;
-}
-
-type Timeframe = '1H' | '1D' | '1W' | '1M' | '1Y';
-
 export default function StockPricesScreen() {
   const colorScheme = useColorScheme();
-  const [selectedSymbol, setSelectedSymbol] = useState<string>(DEFAULT_SYMBOLS[0]);
+  const dispatch = useAppDispatch();
   const [symbolInput, setSymbolInput] = useState<string>('');
-  const [timeframe, setTimeframe] = useState<Timeframe>('1D');
-  const [customSymbols, setCustomSymbols] = useState<string[]>([]);
-  const [priceData, setPriceData] = useState<Map<string, ChartData[]>>(new Map());
-  const [currentPrices, setCurrentPrices] = useState<Map<string, StockPrice>>(new Map());
-  const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Redux state
+  const selectedSymbol = useAppSelector((state) => state.ui.selectedSymbol);
+  const timeframe = useAppSelector((state) => state.ui.timeframe);
+  const customSymbols = useAppSelector((state) => state.ui.customSymbols);
+  const isConnected = useAppSelector((state) => state.ui.isConnected);
+  const isLoading = useAppSelector((state) => state.ui.isLoading);
+  const currentPrices = useAppSelector((state) => state.stockData.currentPrices);
+  const realtimeChartData = useAppSelector((state) => state.stockData.realtimeChartData);
+  const historicalChartData = useAppSelector((state) => state.stockData.historicalChartData);
 
   const colors = Colors[colorScheme ?? 'light'];
   const allSymbols = [...DEFAULT_SYMBOLS, ...customSymbols];
+  const currentPrice = currentPrices[selectedSymbol];
 
-  // Initialize WebSocket connection
+  // Get combined chart data: Historical + Real-time
+  // This is Step C: The Merge - Hybrid Architecture
+  // REST API provides historical candles (the snapshot)
+  // WebSocket provides real-time ticks (the live pulse)
+  const chartData = useMemo((): ChartData[] => {
+    const historical = historicalChartData[selectedSymbol]?.[timeframe] || [];
+    const realtime = realtimeChartData[selectedSymbol] || [];
+
+    if (historical.length === 0 && realtime.length === 0) {
+      return [];
+    }
+
+    // Use candle utils to properly merge historical and real-time data
+    // This handles OHLC candle updates and prevents gaps/duplicates
+    return mergeHistoricalAndRealtime(historical, realtime, timeframe);
+  }, [selectedSymbol, timeframe, historicalChartData, realtimeChartData]);
+
+  // Step A: Load Historical Data (REST API) using RTK Query
+  // RTK Query automatically handles:
+  // - Caching (won't refetch if data exists)
+  // - Loading states
+  // - Error handling
+  // - No manual thunks needed!
+  const {
+    data: historicalDataFromQuery,
+    isLoading: isLoadingHistorical,
+    error: historicalError,
+  } = useGetHistoricalDataQuery(
+    { symbol: selectedSymbol, timeframe },
+    {
+      skip: !isConnected || API_PROVIDER !== 'finnhub' || !FINNHUB_API_KEY,
+      // Refetch when symbol or timeframe changes
+    }
+  );
+
+  // Store RTK Query data in our slice for merging with real-time data
   useEffect(() => {
-    // Select provider based on config
-    const ws = API_PROVIDER === 'finnhub' 
-      ? getFinnhubWebSocket(FINNHUB_API_KEY)
-      : getEODHDWebSocket(EODHD_API_KEY);
+    if (historicalDataFromQuery) {
+      dispatch(
+        setHistoricalData({
+          symbol: selectedSymbol,
+          timeframe,
+          data: historicalDataFromQuery,
+        })
+      );
+    }
+  }, [historicalDataFromQuery, selectedSymbol, timeframe, dispatch]);
 
-    // Check if API key is provided
+  // Step B: Initialize WebSocket Connection (Live Pulse)
+  // This provides real-time price ticks that update the last candle or create new ones
+  useEffect(() => {
+    const ws =
+      API_PROVIDER === 'finnhub'
+        ? getFinnhubWebSocket(FINNHUB_API_KEY)
+        : getEODHDWebSocket(EODHD_API_KEY);
+
     if (API_PROVIDER === 'finnhub' && !FINNHUB_API_KEY) {
-      setError('Finnhub API key is required. Get your free key at https://finnhub.io/');
-      setIsLoading(false);
+      setErrorMessage('Finnhub API key is required. Get your free key at https://finnhub.io/');
+      dispatch(setLoading(false));
       return;
     }
 
     ws.onConnect(() => {
-      setIsConnected(true);
-      setIsLoading(false);
-      setError(null);
+      dispatch(setConnectionStatus(true));
+      dispatch(setLoading(false));
+      setErrorMessage(null);
     });
 
     ws.onError((err) => {
-      setError(err.message);
-      setIsLoading(false);
-      setIsConnected(false);
+      setErrorMessage(err.message);
+      dispatch(setLoading(false));
+      dispatch(setConnectionStatus(false));
     });
 
-    // Subscribe to all default symbols
-    ws.connect(DEFAULT_SYMBOLS)
+    // Subscribe to all symbols
+    ws.connect(allSymbols)
       .then(() => {
-        // Subscribe to price updates for each symbol
-        DEFAULT_SYMBOLS.forEach((symbol) => {
-          ws.onPriceUpdate(symbol, (data: StockPrice) => {
-            setCurrentPrices((prev) => {
-              const newMap = new Map(prev);
-              newMap.set(symbol, data);
-              return newMap;
-            });
+        allSymbols.forEach((symbol) => {
+          ws.onPriceUpdate(symbol, (tick: StockPrice) => {
+            // Update current price (for display)
+            dispatch(updateCurrentPrice({ symbol, price: tick }));
 
-            setPriceData((prev) => {
-              const newMap = new Map(prev);
-              const existing = newMap.get(symbol) || [];
-              
-              // Add new data point
-              const newData: ChartData = {
-                timestamp: data.timestamp,
-                value: data.price,
-              };
+            // Get the last historical timestamp to prevent duplicates
+            const historical = historicalChartData[symbol]?.[timeframe] || [];
+            const lastHistoricalTimestamp =
+              historical.length > 0 ? historical[historical.length - 1].timestamp : undefined;
 
-              // Keep only last 100 data points for performance
-              const updated = [...existing, newData].slice(-100);
-              newMap.set(symbol, updated);
-              return newMap;
-            });
+            // Get current real-time candles
+            const currentRealtime = realtimeChartData[symbol] || [];
+
+            // Update candles with new tick (OHLC logic)
+            const updatedCandles = updateCandleWithTick(
+              currentRealtime,
+              {
+                timestamp: tick.timestamp,
+                price: tick.price,
+                volume: tick.volume,
+              },
+              timeframe,
+              lastHistoricalTimestamp
+            );
+
+            // Update Redux with processed candles
+            dispatch(updateRealtimeCandles({ symbol, candles: updatedCandles }));
           });
         });
       })
       .catch((err) => {
-        setError(err.message || 'Failed to connect to WebSocket');
-        setIsLoading(false);
+        setErrorMessage(err.message || 'Failed to connect to WebSocket');
+        dispatch(setLoading(false));
       });
 
     return () => {
       ws.disconnect();
     };
-  }, []);
+  }, [allSymbols.join(','), timeframe, historicalChartData, realtimeChartData, dispatch]);
 
   // Add new symbol
   const handleAddSymbol = useCallback(() => {
@@ -110,114 +179,74 @@ export default function StockPricesScreen() {
       return;
     }
 
-    // Check if symbol already exists
     if (allSymbols.includes(symbol)) {
-      setSelectedSymbol(symbol);
+      dispatch(setSelectedSymbol(symbol));
       setSymbolInput('');
       return;
     }
 
-    const ws = API_PROVIDER === 'finnhub' 
-      ? getFinnhubWebSocket(FINNHUB_API_KEY)
-      : getEODHDWebSocket(EODHD_API_KEY);
-      
+    const ws =
+      API_PROVIDER === 'finnhub'
+        ? getFinnhubWebSocket(FINNHUB_API_KEY)
+        : getEODHDWebSocket(EODHD_API_KEY);
+
     if (ws.isConnected()) {
-      // Add to custom symbols list
-      setCustomSymbols((prev) => [...prev, symbol]);
-      
+      dispatch(addCustomSymbol(symbol));
       ws.connect([symbol])
         .then(() => {
-          ws.onPriceUpdate(symbol, (data: StockPrice) => {
-            setCurrentPrices((prev) => {
-              const newMap = new Map(prev);
-              newMap.set(symbol, data);
-              return newMap;
-            });
+          ws.onPriceUpdate(symbol, (tick: StockPrice) => {
+            // Update current price
+            dispatch(updateCurrentPrice({ symbol, price: tick }));
 
-            setPriceData((prev) => {
-              const newMap = new Map(prev);
-              const existing = newMap.get(symbol) || [];
-              const newData: ChartData = {
-                timestamp: data.timestamp,
-                value: data.price,
-              };
-              const updated = [...existing, newData].slice(-100);
-              newMap.set(symbol, updated);
-              return newMap;
-            });
+            // Get the last historical timestamp
+            const historical = historicalChartData[symbol]?.[timeframe] || [];
+            const lastHistoricalTimestamp =
+              historical.length > 0 ? historical[historical.length - 1].timestamp : undefined;
+
+            // Get current real-time candles
+            const currentRealtime = realtimeChartData[symbol] || [];
+
+            // Update candles with new tick
+            const updatedCandles = updateCandleWithTick(
+              currentRealtime,
+              {
+                timestamp: tick.timestamp,
+                price: tick.price,
+                volume: tick.volume,
+              },
+              timeframe,
+              lastHistoricalTimestamp
+            );
+
+            // Update Redux
+            dispatch(updateRealtimeCandles({ symbol, candles: updatedCandles }));
           });
-          setSelectedSymbol(symbol);
+          
+          // Historical data will be fetched automatically by RTK Query
+          // when we set the selected symbol (via useGetHistoricalDataQuery)
+          
+          dispatch(setSelectedSymbol(symbol));
           setSymbolInput('');
         })
         .catch((err) => {
           console.error('Failed to add symbol:', err);
-          setError(`Failed to add symbol ${symbol}. Please check if it's valid.`);
+          setErrorMessage(`Failed to add symbol ${symbol}. Please check if it's valid.`);
         });
     } else {
-      setError('WebSocket not connected. Please wait for connection.');
+      setErrorMessage('WebSocket not connected. Please wait for connection.');
     }
-  }, [symbolInput, allSymbols]);
-
-  // Filter chart data based on timeframe
-  // IMPORTANT: This chart is REAL-TIME ONLY - it only shows data collected since the app started.
-  // For proper historical data (1M, 1Y), you need to fetch from REST API endpoints.
-  // Financial apps typically:
-  // - Use REST API for historical data (hourly/daily/monthly/yearly charts)
-  // - Use WebSocket for real-time updates (tick-by-tick)
-  const getFilteredChartData = (): ChartData[] => {
-    const allData = priceData.get(selectedSymbol) || [];
-    if (allData.length === 0) return [];
-    
-    // For real-time data, we only have data since app started
-    // So longer timeframes (1M, 1Y) won't have much data
-    const now = Date.now();
-    let cutoffTime: number;
-    
-    switch (timeframe) {
-      case '1H':
-        cutoffTime = now - 60 * 60 * 1000; // 1 hour
-        break;
-      case '1D':
-        cutoffTime = now - 24 * 60 * 60 * 1000; // 1 day
-        break;
-      case '1W':
-        cutoffTime = now - 7 * 24 * 60 * 60 * 1000; // 1 week
-        break;
-      case '1M':
-        cutoffTime = now - 30 * 24 * 60 * 60 * 1000; // 1 month
-        break;
-      case '1Y':
-        cutoffTime = now - 365 * 24 * 60 * 60 * 1000; // 1 year
-        break;
-      default:
-        return allData;
-    }
-    
-    const filtered = allData.filter((point) => point.timestamp >= cutoffTime);
-    
-    // If filtered data is empty but we have data, show all available data
-    // (this happens when timeframe is longer than app runtime)
-    if (filtered.length === 0 && allData.length > 0) {
-      return allData; // Show all available real-time data
-    }
-    
-    return filtered;
-  };
-
-  const chartData = getFilteredChartData();
-  const currentPrice = currentPrices.get(selectedSymbol);
+  }, [symbolInput, allSymbols, dispatch]);
 
   // Calculate price change
-  const getPriceChange = () => {
+  const priceChange = useMemo(() => {
     if (chartData.length < 2) return { value: 0, percent: 0 };
     const current = chartData[chartData.length - 1]?.value || 0;
     const previous = chartData[0]?.value || current;
     const change = current - previous;
     const percent = previous !== 0 ? (change / previous) * 100 : 0;
     return { value: change, percent };
-  };
+  }, [chartData]);
 
-  const priceChange = getPriceChange();
   const isPositive = priceChange.value >= 0;
 
   return (
@@ -244,12 +273,9 @@ export default function StockPricesScreen() {
         </View>
 
         {/* Error Message */}
-        {error && (
+        {errorMessage && (
           <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
-            <Text style={styles.errorHint}>
-              Make sure you have a valid EODHD API key in config/api.ts
-            </Text>
+            <Text style={styles.errorText}>{errorMessage}</Text>
           </View>
         )}
 
@@ -278,22 +304,26 @@ export default function StockPricesScreen() {
                 selectedSymbol === symbol && styles.symbolButtonActive,
                 {
                   backgroundColor:
-                    selectedSymbol === symbol 
-                      ? (colorScheme === 'dark' ? '#2f95dc' : colors.tint)
+                    selectedSymbol === symbol
+                      ? colorScheme === 'dark'
+                        ? '#2f95dc'
+                        : colors.tint
                       : 'transparent',
                   borderColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
                 },
               ]}
-              onPress={() => setSelectedSymbol(symbol)}
+              onPress={() => dispatch(setSelectedSymbol(symbol))}
             >
               <Text
                 style={[
                   styles.symbolButtonText,
                   {
                     color:
-                      selectedSymbol === symbol 
-                        ? '#FFFFFF' 
-                        : (colorScheme === 'dark' ? '#fff' : colors.text),
+                      selectedSymbol === symbol
+                        ? '#FFFFFF'
+                        : colorScheme === 'dark'
+                          ? '#fff'
+                          : colors.text,
                   },
                 ]}
               >
@@ -323,10 +353,10 @@ export default function StockPricesScreen() {
           />
           <TouchableOpacity
             style={[
-              styles.addButton, 
-              { 
+              styles.addButton,
+              {
                 backgroundColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
-              }
+              },
             ]}
             onPress={handleAddSymbol}
           >
@@ -337,9 +367,7 @@ export default function StockPricesScreen() {
         {/* Current Price Display */}
         {currentPrice && (
           <View style={styles.priceContainer}>
-            <Text style={[styles.symbolName, { color: colors.text }]}>
-              {selectedSymbol}
-            </Text>
+            <Text style={[styles.symbolName, { color: colors.text }]}>{selectedSymbol}</Text>
             <Text style={[styles.price, { color: colors.text }]}>
               ${currentPrice.price.toFixed(2)}
             </Text>
@@ -379,22 +407,26 @@ export default function StockPricesScreen() {
                   timeframe === tf && styles.timeframeButtonActive,
                   {
                     backgroundColor:
-                      timeframe === tf 
-                        ? (colorScheme === 'dark' ? '#2f95dc' : colors.tint)
+                      timeframe === tf
+                        ? colorScheme === 'dark'
+                          ? '#2f95dc'
+                          : colors.tint
                         : 'transparent',
                     borderColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
                   },
                 ]}
-                onPress={() => setTimeframe(tf)}
+                onPress={() => dispatch(setTimeframe(tf))}
               >
                 <Text
                   style={[
                     styles.timeframeButtonText,
                     {
                       color:
-                        timeframe === tf 
-                          ? '#FFFFFF' 
-                          : (colorScheme === 'dark' ? '#fff' : colors.text),
+                        timeframe === tf
+                          ? '#FFFFFF'
+                          : colorScheme === 'dark'
+                            ? '#fff'
+                            : colors.text,
                     },
                   ]}
                 >
@@ -406,7 +438,20 @@ export default function StockPricesScreen() {
         </View>
 
         {/* Chart */}
-        {chartData.length > 0 ? (
+        {isLoadingHistorical ? (
+          <View style={styles.noDataContainer}>
+            <ActivityIndicator size="large" color={colors.tint} />
+            <Text style={[styles.noDataText, { color: colors.text + '80', marginTop: 12 }]}>
+              Loading {timeframe} data...
+            </Text>
+          </View>
+        ) : historicalError ? (
+          <View style={styles.noDataContainer}>
+            <Text style={[styles.noDataText, { color: '#F44336' }]}>
+              Error loading historical data: {historicalError.toString()}
+            </Text>
+          </View>
+        ) : chartData.length > 0 ? (
           <View style={styles.chartContainer}>
             <LineChartProvider data={chartData} key={`${selectedSymbol}-${timeframe}`}>
               <LineChart height={300}>
@@ -421,7 +466,7 @@ export default function StockPricesScreen() {
                   }}
                   tickCount={5}
                 />
-                
+
                 {/* X-Axis (Time) */}
                 <LineChart.Axis
                   position="bottom"
@@ -433,7 +478,7 @@ export default function StockPricesScreen() {
                   }}
                   tickCount={5}
                 />
-                
+
                 {/* Chart Path */}
                 <LineChart.Path
                   color={isPositive ? '#4CAF50' : '#F44336'}
@@ -441,7 +486,7 @@ export default function StockPricesScreen() {
                 >
                   <LineChart.Gradient />
                 </LineChart.Path>
-                
+
                 {/* Cursor and Tooltip */}
                 <LineChart.CursorCrosshair color={colors.tint}>
                   <LineChart.Tooltip
@@ -460,7 +505,7 @@ export default function StockPricesScreen() {
                   />
                 </LineChart.CursorCrosshair>
               </LineChart>
-              
+
               {/* Price and Time Display */}
               <View style={styles.chartPriceContainer}>
                 <LineChart.PriceText
@@ -481,9 +526,9 @@ export default function StockPricesScreen() {
         ) : (
           <View style={styles.noDataContainer}>
             <Text style={[styles.noDataText, { color: colors.text + '80' }]}>
-              {chartData.length === 0 && priceData.get(selectedSymbol)?.length === 0
+              {isConnected
                 ? 'Waiting for price data...'
-                : `No data available for ${timeframe} timeframe. Chart shows real-time data only.`}
+                : 'Connect to WebSocket to see real-time data'}
             </Text>
           </View>
         )}
@@ -491,10 +536,10 @@ export default function StockPricesScreen() {
         {/* Info Section */}
         <View style={styles.infoContainer}>
           <Text style={[styles.infoText, { color: colors.text + '80' }]}>
-            Real-time stock prices powered by {API_PROVIDER === 'finnhub' ? 'Finnhub' : 'EODHD'} WebSocket API
+            Real-time: WebSocket | Historical: REST API (like CoinGecko, TradingView)
           </Text>
           <Text style={[styles.infoText, { color: colors.text + '80' }]}>
-            {API_PROVIDER === 'finnhub' 
+            {API_PROVIDER === 'finnhub'
               ? 'Get your free API key at: https://finnhub.io/'
               : 'Get your API key at: https://eodhistoricaldata.com/'}
           </Text>
@@ -547,11 +592,6 @@ const styles = StyleSheet.create({
     color: '#C62828',
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 4,
-  },
-  errorHint: {
-    color: '#C62828',
-    fontSize: 12,
   },
   loadingContainer: {
     alignItems: 'center',
