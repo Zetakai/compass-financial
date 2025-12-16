@@ -12,7 +12,6 @@ import {
   updateRealtimeCandles,
 } from '@/store/slices/stockDataSlice';
 import {
-  addCustomSymbol,
   setConnectionStatus,
   setLoading,
   setSelectedSymbol,
@@ -23,13 +22,12 @@ import {
   mergeHistoricalAndRealtime,
   updateCandleWithTick,
 } from '@/utils/candleUtils';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -37,13 +35,11 @@ import {
 export default function StockPricesScreen() {
   const colorScheme = useColorScheme();
   const dispatch = useAppDispatch();
-  const [symbolInput, setSymbolInput] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Redux state
   const selectedSymbol = useAppSelector((state) => state.ui.selectedSymbol);
   const timeframe = useAppSelector((state) => state.ui.timeframe);
-  const customSymbols = useAppSelector((state) => state.ui.customSymbols);
   const isConnected = useAppSelector((state) => state.ui.isConnected);
   const isLoading = useAppSelector((state) => state.ui.isLoading);
   const currentPrices = useAppSelector((state) => state.stockData.currentPrices);
@@ -51,7 +47,7 @@ export default function StockPricesScreen() {
   const historicalChartData = useAppSelector((state) => state.stockData.historicalChartData);
 
   const colors = Colors[colorScheme ?? 'light'];
-  const allSymbols = [...DEFAULT_SYMBOLS, ...customSymbols];
+  const allSymbols = DEFAULT_SYMBOLS;
   const currentPrice = currentPrices[selectedSymbol];
 
   // Get date format options based on timeframe for X-axis
@@ -253,68 +249,6 @@ export default function StockPricesScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allSymbols.join(','), FINNHUB_API_KEY]);
 
-  // Add new symbol
-  const handleAddSymbol = useCallback(() => {
-    const symbol = symbolInput.trim().toUpperCase();
-    if (!symbol) {
-      return;
-    }
-
-    if (allSymbols.includes(symbol)) {
-      dispatch(setSelectedSymbol(symbol));
-      setSymbolInput('');
-      return;
-    }
-
-    // Always use Finnhub WebSocket for real-time data
-    const ws = getFinnhubWebSocket(FINNHUB_API_KEY);
-
-    if (ws.isConnected()) {
-      dispatch(addCustomSymbol(symbol));
-      ws.connect([symbol])
-        .then(() => {
-          ws.onPriceUpdate(symbol, (tick: StockPrice) => {
-            // Update current price
-            dispatch(updateCurrentPrice({ symbol, price: tick }));
-
-            // Get the last historical timestamp
-            const historical = historicalChartData[symbol]?.[timeframe] || [];
-            const lastHistoricalTimestamp =
-              historical.length > 0 ? historical[historical.length - 1].timestamp : undefined;
-
-            // Get current real-time candles
-            const currentRealtime = realtimeChartData[symbol] || [];
-
-            // Update candles with new tick
-            const updatedCandles = updateCandleWithTick(
-              currentRealtime,
-              {
-                timestamp: tick.timestamp,
-                price: tick.price,
-                volume: tick.volume,
-              },
-              timeframe,
-              lastHistoricalTimestamp
-            );
-
-            // Update Redux
-            dispatch(updateRealtimeCandles({ symbol, candles: updatedCandles }));
-          });
-          
-          // Historical data will be fetched automatically by RTK Query
-          // when we set the selected symbol (via useGetHistoricalDataQuery)
-          
-          dispatch(setSelectedSymbol(symbol));
-          setSymbolInput('');
-        })
-        .catch((err) => {
-          console.error('Failed to add symbol:', err);
-          setErrorMessage(`Failed to add symbol ${symbol}. Please check if it's valid.`);
-        });
-    } else {
-      setErrorMessage('WebSocket not connected. Please wait for connection.');
-    }
-  }, [symbolInput, allSymbols, dispatch]);
 
   // Calculate price change
   const priceChange = useMemo(() => {
@@ -411,37 +345,6 @@ export default function StockPricesScreen() {
             </TouchableOpacity>
           ))}
         </ScrollView>
-
-        {/* Add Symbol Input */}
-        <View style={styles.addSymbolContainer}>
-          <TextInput
-            style={[
-              styles.symbolInput,
-              {
-                backgroundColor: colors.background,
-                borderColor: colors.tint,
-                color: colors.text,
-              },
-            ]}
-            placeholder="Add symbol (e.g., NVDA)"
-            placeholderTextColor={colors.text + '80'}
-            value={symbolInput}
-            onChangeText={setSymbolInput}
-            onSubmitEditing={handleAddSymbol}
-            autoCapitalize="characters"
-          />
-          <TouchableOpacity
-            style={[
-              styles.addButton,
-              {
-                backgroundColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
-              },
-            ]}
-            onPress={handleAddSymbol}
-          >
-            <Text style={styles.addButtonText}>Add</Text>
-          </TouchableOpacity>
-        </View>
 
         {/* Current Price Display */}
         {currentPrice && (
@@ -639,30 +542,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  addSymbolContainer: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 24,
-  },
-  symbolInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-  },
-  addButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    justifyContent: 'center',
-  },
-  addButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
   priceContainer: {
     alignItems: 'center',
     marginBottom: 24,
@@ -696,7 +575,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: 'rgba(0,0,0,0.02)',
-    padding: 16,
+    padding: 0,
   },
   chartPriceContainer: {
     marginTop: 8,
