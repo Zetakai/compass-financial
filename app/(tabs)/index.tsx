@@ -20,10 +20,14 @@ interface ChartData {
   value: number;
 }
 
+type Timeframe = '1H' | '1D' | '1W' | '1M' | '1Y';
+
 export default function StockPricesScreen() {
   const colorScheme = useColorScheme();
   const [selectedSymbol, setSelectedSymbol] = useState<string>(DEFAULT_SYMBOLS[0]);
   const [symbolInput, setSymbolInput] = useState<string>('');
+  const [timeframe, setTimeframe] = useState<Timeframe>('1D');
+  const [customSymbols, setCustomSymbols] = useState<string[]>([]);
   const [priceData, setPriceData] = useState<Map<string, ChartData[]>>(new Map());
   const [currentPrices, setCurrentPrices] = useState<Map<string, StockPrice>>(new Map());
   const [isConnected, setIsConnected] = useState(false);
@@ -31,6 +35,7 @@ export default function StockPricesScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const colors = Colors[colorScheme ?? 'light'];
+  const allSymbols = [...DEFAULT_SYMBOLS, ...customSymbols];
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -101,7 +106,14 @@ export default function StockPricesScreen() {
   // Add new symbol
   const handleAddSymbol = useCallback(() => {
     const symbol = symbolInput.trim().toUpperCase();
-    if (!symbol || DEFAULT_SYMBOLS.includes(symbol)) {
+    if (!symbol) {
+      return;
+    }
+
+    // Check if symbol already exists
+    if (allSymbols.includes(symbol)) {
+      setSelectedSymbol(symbol);
+      setSymbolInput('');
       return;
     }
 
@@ -110,6 +122,9 @@ export default function StockPricesScreen() {
       : getEODHDWebSocket(EODHD_API_KEY);
       
     if (ws.isConnected()) {
+      // Add to custom symbols list
+      setCustomSymbols((prev) => [...prev, symbol]);
+      
       ws.connect([symbol])
         .then(() => {
           ws.onPriceUpdate(symbol, (data: StockPrice) => {
@@ -131,20 +146,60 @@ export default function StockPricesScreen() {
               return newMap;
             });
           });
+          setSelectedSymbol(symbol);
           setSymbolInput('');
         })
-        .catch(console.error);
+        .catch((err) => {
+          console.error('Failed to add symbol:', err);
+          setError(`Failed to add symbol ${symbol}. Please check if it's valid.`);
+        });
+    } else {
+      setError('WebSocket not connected. Please wait for connection.');
     }
-  }, [symbolInput]);
+  }, [symbolInput, allSymbols]);
 
-  const chartData = priceData.get(selectedSymbol) || [];
+  // Filter chart data based on timeframe
+  // Note: Financial apps typically use REST API for historical data (hourly/daily/monthly/yearly)
+  // and WebSocket for real-time updates. This implementation filters real-time data.
+  // For production, consider fetching historical data from REST API endpoints.
+  const getFilteredChartData = (): ChartData[] => {
+    const allData = priceData.get(selectedSymbol) || [];
+    if (allData.length === 0) return [];
+    
+    const now = Date.now();
+    let cutoffTime: number;
+    
+    switch (timeframe) {
+      case '1H':
+        cutoffTime = now - 60 * 60 * 1000; // 1 hour
+        break;
+      case '1D':
+        cutoffTime = now - 24 * 60 * 60 * 1000; // 1 day
+        break;
+      case '1W':
+        cutoffTime = now - 7 * 24 * 60 * 60 * 1000; // 1 week
+        break;
+      case '1M':
+        cutoffTime = now - 30 * 24 * 60 * 60 * 1000; // 1 month
+        break;
+      case '1Y':
+        cutoffTime = now - 365 * 24 * 60 * 60 * 1000; // 1 year
+        break;
+      default:
+        return allData;
+    }
+    
+    return allData.filter((point) => point.timestamp >= cutoffTime);
+  };
+
+  const chartData = getFilteredChartData();
   const currentPrice = currentPrices.get(selectedSymbol);
 
   // Calculate price change
   const getPriceChange = () => {
     if (chartData.length < 2) return { value: 0, percent: 0 };
     const current = chartData[chartData.length - 1]?.value || 0;
-    const previous = chartData[chartData.length - 2]?.value || current;
+    const previous = chartData[0]?.value || current;
     const change = current - previous;
     const percent = previous !== 0 ? (change / previous) * 100 : 0;
     return { value: change, percent };
@@ -203,7 +258,7 @@ export default function StockPricesScreen() {
           style={styles.symbolSelector}
           contentContainerStyle={styles.symbolSelectorContent}
         >
-          {DEFAULT_SYMBOLS.map((symbol) => (
+          {allSymbols.map((symbol) => (
             <TouchableOpacity
               key={symbol}
               style={[
@@ -211,8 +266,10 @@ export default function StockPricesScreen() {
                 selectedSymbol === symbol && styles.symbolButtonActive,
                 {
                   backgroundColor:
-                    selectedSymbol === symbol ? colors.tint : colors.background,
-                  borderColor: colors.tint,
+                    selectedSymbol === symbol 
+                      ? (colorScheme === 'dark' ? '#2f95dc' : colors.tint)
+                      : 'transparent',
+                  borderColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
                 },
               ]}
               onPress={() => setSelectedSymbol(symbol)}
@@ -222,7 +279,9 @@ export default function StockPricesScreen() {
                   styles.symbolButtonText,
                   {
                     color:
-                      selectedSymbol === symbol ? '#FFFFFF' : colors.text,
+                      selectedSymbol === symbol 
+                        ? '#FFFFFF' 
+                        : (colorScheme === 'dark' ? '#fff' : colors.text),
                   },
                 ]}
               >
@@ -251,7 +310,12 @@ export default function StockPricesScreen() {
             autoCapitalize="characters"
           />
           <TouchableOpacity
-            style={[styles.addButton, { backgroundColor: colors.tint }]}
+            style={[
+              styles.addButton, 
+              { 
+                backgroundColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
+              }
+            ]}
             onPress={handleAddSymbol}
           >
             <Text style={styles.addButtonText}>Add</Text>
@@ -287,10 +351,52 @@ export default function StockPricesScreen() {
           </View>
         )}
 
+        {/* Timeframe Selector */}
+        <View style={styles.timeframeContainer}>
+          <Text style={[styles.timeframeLabel, { color: colors.text }]}>Timeframe:</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.timeframeSelector}
+          >
+            {(['1H', '1D', '1W', '1M', '1Y'] as Timeframe[]).map((tf) => (
+              <TouchableOpacity
+                key={tf}
+                style={[
+                  styles.timeframeButton,
+                  timeframe === tf && styles.timeframeButtonActive,
+                  {
+                    backgroundColor:
+                      timeframe === tf 
+                        ? (colorScheme === 'dark' ? '#2f95dc' : colors.tint)
+                        : 'transparent',
+                    borderColor: colorScheme === 'dark' ? '#2f95dc' : colors.tint,
+                  },
+                ]}
+                onPress={() => setTimeframe(tf)}
+              >
+                <Text
+                  style={[
+                    styles.timeframeButtonText,
+                    {
+                      color:
+                        timeframe === tf 
+                          ? '#FFFFFF' 
+                          : (colorScheme === 'dark' ? '#fff' : colors.text),
+                    },
+                  ]}
+                >
+                  {tf}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
         {/* Chart */}
         {chartData.length > 0 ? (
           <View style={styles.chartContainer}>
-            <LineChartProvider data={chartData}>
+            <LineChartProvider data={chartData} key={`${selectedSymbol}-${timeframe}`}>
               <LineChart height={300}>
                 <LineChart.Path
                   color={isPositive ? '#4CAF50' : '#F44336'}
@@ -299,15 +405,33 @@ export default function StockPricesScreen() {
                   <LineChart.Gradient />
                 </LineChart.Path>
                 <LineChart.CursorCrosshair color={colors.tint}>
-                  <LineChart.Tooltip />
+                  <LineChart.Tooltip
+                    textStyle={{
+                      color: colors.text,
+                      fontSize: 12,
+                      fontWeight: '600',
+                    }}
+                    style={{
+                      backgroundColor: colors.background,
+                      borderColor: colors.tint,
+                      borderWidth: 1,
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  />
                 </LineChart.CursorCrosshair>
               </LineChart>
               <View style={styles.chartPriceContainer}>
                 <LineChart.PriceText
                   style={[styles.chartPriceText, { color: colors.text }]}
-                  format={({ value }: { value: string; formatted: string }) => {
-                    const numValue = parseFloat(value);
-                    return `$${isNaN(numValue) ? '0.00' : numValue.toFixed(2)}`;
+                />
+                <LineChart.DatetimeText
+                  style={[styles.chartTimeText, { color: colors.text + '80' }]}
+                  options={{
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    month: 'short',
+                    day: 'numeric',
                   }}
                 />
               </View>
@@ -481,6 +605,38 @@ const styles = StyleSheet.create({
   chartPriceText: {
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  chartTimeText: {
+    fontSize: 12,
+    marginTop: 4,
+  },
+  timeframeContainer: {
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  timeframeLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  timeframeSelector: {
+    gap: 8,
+    flexDirection: 'row',
+  },
+  timeframeButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  timeframeButtonActive: {
+    borderWidth: 0,
+  },
+  timeframeButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   noDataContainer: {
     height: 300,
