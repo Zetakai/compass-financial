@@ -143,30 +143,43 @@ class FinnhubWebSocket {
           this.isConnecting = false;
           this.ws = null;
           
-          // Don't reconnect if it was closed cleanly or due to authentication
-          if (event.code === 1000 || event.code === 1008 || event.code === 1011) {
-            if (event.code === 1008 || (event.reason && event.reason.includes('403'))) {
+          // Check for rate limiting (429 Too Many Requests)
+          const isRateLimited = event.reason && event.reason.includes('429');
+          
+          // Don't reconnect if it was closed cleanly, due to authentication, or rate limiting
+          if (event.code === 1000 || event.code === 1008 || event.code === 1011 || isRateLimited) {
+            if (isRateLimited) {
+              console.log('❌ Rate limit exceeded (429). Please wait before reconnecting.');
+              if (this.errorCallback) {
+                this.errorCallback(new Error('Rate limit exceeded. Please wait a few minutes before trying again.'));
+              }
+            } else if (event.code === 1008 || (event.reason && event.reason.includes('403'))) {
               console.log('❌ Connection closed due to authentication failure. Please check your API key.');
+              if (this.errorCallback) {
+                this.errorCallback(new Error('Authentication failed. Please check your API key.'));
+              }
             } else {
               console.log('WebSocket closed cleanly. Not reconnecting.');
-            }
-            if (this.errorCallback && !event.wasClean) {
-              this.errorCallback(new Error(event.reason || 'Connection closed'));
+              if (this.errorCallback && !event.wasClean) {
+                this.errorCallback(new Error(event.reason || 'Connection closed'));
+              }
             }
             return;
           }
           
-          // Attempt to reconnect
+          // Attempt to reconnect with exponential backoff
           if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+            // Exponential backoff: 3s, 6s, 12s, 24s, 48s
+            const backoffDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+            console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${backoffDelay}ms...`);
             setTimeout(() => {
               this.connect(this.symbols).catch(console.error);
-            }, this.reconnectDelay);
+            }, backoffDelay);
           } else {
             console.error('Max reconnection attempts reached. Please check your API key and connection.');
             if (this.errorCallback) {
-              this.errorCallback(new Error('Max reconnection attempts reached'));
+              this.errorCallback(new Error('Max reconnection attempts reached. Please check your API key and connection.'));
             }
           }
         };

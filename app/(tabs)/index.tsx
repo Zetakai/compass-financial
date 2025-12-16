@@ -1,9 +1,9 @@
+import TradingViewChart from '@/components/TradingViewChart';
 import { useColorScheme } from '@/components/useColorScheme';
-import { API_PROVIDER, DEFAULT_SYMBOLS, EODHD_API_KEY, FINNHUB_API_KEY } from '@/config/api';
+import { DEFAULT_SYMBOLS, EODHD_API_KEY, FINNHUB_API_KEY } from '@/config/api';
 import Colors from '@/constants/Colors';
-import { getEODHDWebSocket } from '@/services/eodhdWebSocket';
 import { getFinnhubWebSocket, StockPrice } from '@/services/finnhubWebSocket';
-import { useGetHistoricalDataQuery } from '@/store/api/finnhubApi';
+import { useGetEODHDHistoricalDataQuery } from '@/store/api/eodhdApi';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   ChartData,
@@ -33,7 +33,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { LineChart, LineChartProvider } from 'react-native-wagmi-charts';
 
 export default function StockPricesScreen() {
   const colorScheme = useColorScheme();
@@ -54,6 +53,66 @@ export default function StockPricesScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const allSymbols = [...DEFAULT_SYMBOLS, ...customSymbols];
   const currentPrice = currentPrices[selectedSymbol];
+
+  // Get date format options based on timeframe for X-axis
+  const getDateFormatOptions = (tf: Timeframe): Intl.DateTimeFormatOptions => {
+    switch (tf) {
+      case '1H':
+        return {
+          hour: '2-digit',
+          minute: '2-digit',
+        };
+      case '1D':
+        return {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+        };
+      case '1W':
+        return {
+          month: 'short',
+          day: 'numeric',
+        };
+      case '1M':
+        return {
+          month: 'short',
+          day: 'numeric',
+          year: '2-digit',
+        };
+      case '1Y':
+        return {
+          month: 'short',
+          year: 'numeric',
+        };
+      default:
+        return {
+          month: 'short',
+          day: 'numeric',
+        };
+    }
+  };
+
+  // Helper to extract error message from RTK Query error
+  const getErrorMessage = (error: any): string => {
+    if (!error) return 'Unknown error';
+    
+    // RTK Query error structure
+    if (error.status) {
+      // HTTP error
+      if (error.data) {
+        if (typeof error.data === 'string') return error.data;
+        if (error.data.error) return error.data.error;
+        if (error.data.message) return error.data.message;
+      }
+      return `HTTP ${error.status}: ${error.error || 'Request failed'}`;
+    }
+    
+    // Network or other errors
+    if (error.error) return error.error;
+    if (error.message) return error.message;
+    
+    return 'Failed to load historical data';
+  };
 
   // Get combined chart data: Historical + Real-time
   // This is Step C: The Merge - Hybrid Architecture
@@ -78,17 +137,39 @@ export default function StockPricesScreen() {
   // - Loading states
   // - Error handling
   // - No manual thunks needed!
+  
+  // Use EODHD for historical data (REST API)
   const {
-    data: historicalDataFromQuery,
-    isLoading: isLoadingHistorical,
-    error: historicalError,
-  } = useGetHistoricalDataQuery(
+    data: eodhdHistoricalData,
+    isLoading: isLoadingEODHD,
+    error: eodhdError,
+  } = useGetEODHDHistoricalDataQuery(
     { symbol: selectedSymbol, timeframe },
     {
-      skip: !isConnected || API_PROVIDER !== 'finnhub' || !FINNHUB_API_KEY,
-      // Refetch when symbol or timeframe changes
+      skip: !isConnected || !EODHD_API_KEY,
     }
   );
+
+  // Combine loading and error states
+  const isLoadingHistorical = isLoadingEODHD;
+  const historicalError = eodhdError;
+  const historicalDataFromQuery = eodhdHistoricalData;
+
+  // Stable key for chart - only remount when symbol or timeframe changes
+  // Using a simpler key to prevent viewstate errors during rapid timeframe changes
+  const chartKey = useMemo(() => {
+    return `${selectedSymbol}-${timeframe}`;
+  }, [selectedSymbol, timeframe]);
+
+  // Track if we should show the chart (prevent rendering during data transitions)
+  const shouldShowChart = useMemo(() => {
+    // Don't show chart if we're loading new historical data
+    if (isLoadingHistorical) return false;
+    // Don't show chart if there's an error
+    if (historicalError) return false;
+    // Only show if we have data
+    return chartData.length > 0;
+  }, [isLoadingHistorical, historicalError, chartData.length]);
 
   // Store RTK Query data in our slice for merging with real-time data
   useEffect(() => {
@@ -104,15 +185,12 @@ export default function StockPricesScreen() {
   }, [historicalDataFromQuery, selectedSymbol, timeframe, dispatch]);
 
   // Step B: Initialize WebSocket Connection (Live Pulse)
-  // This provides real-time price ticks that update the last candle or create new ones
+  // Use Finnhub WebSocket for real-time data
   useEffect(() => {
-    const ws =
-      API_PROVIDER === 'finnhub'
-        ? getFinnhubWebSocket(FINNHUB_API_KEY)
-        : getEODHDWebSocket(EODHD_API_KEY);
+    const ws = getFinnhubWebSocket(FINNHUB_API_KEY);
 
-    if (API_PROVIDER === 'finnhub' && !FINNHUB_API_KEY) {
-      setErrorMessage('Finnhub API key is required. Get your free key at https://finnhub.io/');
+    if (!FINNHUB_API_KEY) {
+      setErrorMessage('Finnhub API key is required for WebSocket. Get your free key at https://finnhub.io/');
       dispatch(setLoading(false));
       return;
     }
@@ -170,7 +248,10 @@ export default function StockPricesScreen() {
     return () => {
       ws.disconnect();
     };
-  }, [allSymbols.join(','), timeframe, historicalChartData, realtimeChartData, dispatch]);
+    // Only reconnect when symbols change, NOT when timeframe changes
+    // Timeframe only affects historical data (REST API), not WebSocket
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSymbols.join(','), FINNHUB_API_KEY]);
 
   // Add new symbol
   const handleAddSymbol = useCallback(() => {
@@ -185,10 +266,8 @@ export default function StockPricesScreen() {
       return;
     }
 
-    const ws =
-      API_PROVIDER === 'finnhub'
-        ? getFinnhubWebSocket(FINNHUB_API_KEY)
-        : getEODHDWebSocket(EODHD_API_KEY);
+    // Always use Finnhub WebSocket for real-time data
+    const ws = getFinnhubWebSocket(FINNHUB_API_KEY);
 
     if (ws.isConnected()) {
       dispatch(addCustomSymbol(symbol));
@@ -448,80 +527,17 @@ export default function StockPricesScreen() {
         ) : historicalError ? (
           <View style={styles.noDataContainer}>
             <Text style={[styles.noDataText, { color: '#F44336' }]}>
-              Error loading historical data: {historicalError.toString()}
+              Error loading historical data: {getErrorMessage(historicalError)}
             </Text>
           </View>
-        ) : chartData.length > 0 ? (
-          <View style={styles.chartContainer}>
-            <LineChartProvider data={chartData} key={`${selectedSymbol}-${timeframe}`}>
-              <LineChart height={300}>
-                {/* Y-Axis (Price) */}
-                <LineChart.Axis
-                  position="left"
-                  orientation="vertical"
-                  color={colorScheme === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'}
-                  textStyle={{
-                    color: colors.text + '80',
-                    fontSize: 10,
-                  }}
-                  tickCount={5}
-                />
-
-                {/* X-Axis (Time) */}
-                <LineChart.Axis
-                  position="bottom"
-                  orientation="horizontal"
-                  color={colorScheme === 'dark' ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'}
-                  textStyle={{
-                    color: colors.text + '80',
-                    fontSize: 10,
-                  }}
-                  tickCount={5}
-                />
-
-                {/* Chart Path */}
-                <LineChart.Path
-                  color={isPositive ? '#4CAF50' : '#F44336'}
-                  width={2}
-                >
-                  <LineChart.Gradient />
-                </LineChart.Path>
-
-                {/* Cursor and Tooltip */}
-                <LineChart.CursorCrosshair color={colors.tint}>
-                  <LineChart.Tooltip
-                    textStyle={{
-                      color: colors.text,
-                      fontSize: 12,
-                      fontWeight: '600',
-                    }}
-                    style={{
-                      backgroundColor: colors.background,
-                      borderColor: colors.tint,
-                      borderWidth: 1,
-                      borderRadius: 8,
-                      padding: 8,
-                    }}
-                  />
-                </LineChart.CursorCrosshair>
-              </LineChart>
-
-              {/* Price and Time Display */}
-              <View style={styles.chartPriceContainer}>
-                <LineChart.PriceText
-                  style={[styles.chartPriceText, { color: colors.text }]}
-                />
-                <LineChart.DatetimeText
-                  style={[styles.chartTimeText, { color: colors.text + '80' }]}
-                  options={{
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    month: 'short',
-                    day: 'numeric',
-                  }}
-                />
-              </View>
-            </LineChartProvider>
+        ) : shouldShowChart && chartData.length > 0 ? (
+          <View style={styles.chartContainer} key={chartKey}>
+            <TradingViewChart
+              data={chartData}
+              height={300}
+              timeframe={timeframe}
+              isPositive={isPositive}
+            />
           </View>
         ) : (
           <View style={styles.noDataContainer}>
@@ -539,9 +555,10 @@ export default function StockPricesScreen() {
             Real-time: WebSocket | Historical: REST API (like CoinGecko, TradingView)
           </Text>
           <Text style={[styles.infoText, { color: colors.text + '80' }]}>
-            {API_PROVIDER === 'finnhub'
-              ? 'Get your free API key at: https://finnhub.io/'
-              : 'Get your API key at: https://eodhistoricaldata.com/'}
+            Historical: EODHD | Real-time: Finnhub WebSocket
+          </Text>
+          <Text style={[styles.infoText, { color: colors.text + '80' }]}>
+            Get EODHD key: https://eodhistoricaldata.com/ | Get Finnhub key: https://finnhub.io/
           </Text>
         </View>
       </ScrollView>
