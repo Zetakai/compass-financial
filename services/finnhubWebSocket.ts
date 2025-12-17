@@ -44,6 +44,8 @@ class FinnhubWebSocket {
   private reconnectDelay = 3000;
   private isConnecting = false;
   private pingInterval: NodeJS.Timeout | null = null;
+  private rateLimitedUntil: number | null = null; // Timestamp when rate limit expires
+  private readonly RATE_LIMIT_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown after 429
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -55,6 +57,24 @@ class FinnhubWebSocket {
    */
   connect(symbols: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
+      // Check if we're still in rate limit cooldown
+      if (this.rateLimitedUntil && Date.now() < this.rateLimitedUntil) {
+        const remainingMinutes = Math.ceil((this.rateLimitedUntil - Date.now()) / 60000);
+        const error = new Error(`Rate limited. Please wait ${remainingMinutes} more minute(s) before reconnecting.`);
+        console.log(`⏳ Still in rate limit cooldown. Wait ${remainingMinutes} more minute(s).`);
+        if (this.errorCallback) {
+          this.errorCallback(error);
+        }
+        reject(error);
+        return;
+      }
+
+      // Reset rate limit if cooldown expired
+      if (this.rateLimitedUntil && Date.now() >= this.rateLimitedUntil) {
+        this.rateLimitedUntil = null;
+        this.reconnectAttempts = 0; // Reset attempts after cooldown
+      }
+
       if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
         resolve();
         return;
@@ -74,6 +94,7 @@ class FinnhubWebSocket {
           console.log('Finnhub WebSocket connected');
           this.isConnecting = false;
           this.reconnectAttempts = 0;
+          this.rateLimitedUntil = null; // Reset rate limit cooldown on successful connection
           
           // Wait a bit before subscribing to ensure connection is stable
           setTimeout(() => {
@@ -149,9 +170,12 @@ class FinnhubWebSocket {
           // Don't reconnect if it was closed cleanly, due to authentication, or rate limiting
           if (event.code === 1000 || event.code === 1008 || event.code === 1011 || isRateLimited) {
             if (isRateLimited) {
-              console.log('❌ Rate limit exceeded (429). Please wait before reconnecting.');
+              // Set cooldown period (5 minutes)
+              this.rateLimitedUntil = Date.now() + this.RATE_LIMIT_COOLDOWN;
+              this.reconnectAttempts = this.maxReconnectAttempts; // Prevent any reconnection attempts
+              console.log(`❌ Rate limit exceeded (429). Cooldown active for ${this.RATE_LIMIT_COOLDOWN / 60000} minutes.`);
               if (this.errorCallback) {
-                this.errorCallback(new Error('Rate limit exceeded. Please wait a few minutes before trying again.'));
+                this.errorCallback(new Error(`Rate limit exceeded. Please wait ${this.RATE_LIMIT_COOLDOWN / 60000} minutes before trying again.`));
               }
             } else if (event.code === 1008 || (event.reason && event.reason.includes('403'))) {
               console.log('❌ Connection closed due to authentication failure. Please check your API key.');

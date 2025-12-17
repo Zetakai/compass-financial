@@ -56,8 +56,8 @@ export default function StockListScreen() {
 
   const handleStockPress = (symbol: string) => {
     dispatch(setSelectedSymbol(symbol));
-    // Navigate to the chart tab (index)
-    router.push('/');
+    // Navigate to the stock detail screen
+    router.push(`/stock/${symbol}`);
   };
 
   const renderStockItem = ({ item }: { item: typeof stockList[0] }) => {

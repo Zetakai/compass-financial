@@ -120,15 +120,18 @@ export const eodhdApi = createApi({
 
         // Convert EODHD format to our ChartData format
         // EODHD format: { date: "2024-01-01", open: 100, high: 105, low: 99, close: 103, adjusted_close: 103, volume: 1000000 }
-        const chartData: ChartData[] = response.map((item: any) => ({
-          timestamp: new Date(item.date).getTime(), // Convert date string to milliseconds
-          value: item.close || item.adjusted_close, // Use close price as main value
-          open: item.open,
-          high: item.high,
-          low: item.low,
-          close: item.close || item.adjusted_close,
-          volume: item.volume || 0,
-        }));
+        // EODHD returns data in reverse chronological order (newest first), so we need to reverse it
+        const chartData: ChartData[] = response
+          .map((item: any) => ({
+            timestamp: new Date(item.date).getTime(), // Convert date string to milliseconds
+            value: item.close || item.adjusted_close, // Use close price as main value
+            open: item.open,
+            high: item.high,
+            low: item.low,
+            close: item.close || item.adjusted_close,
+            volume: item.volume || 0,
+          }))
+          .reverse(); // Reverse to get chronological order (oldest first)
 
         return chartData;
       },
