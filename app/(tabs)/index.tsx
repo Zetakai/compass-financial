@@ -133,8 +133,8 @@ export default function StockListScreen() {
 
   const handleStockPress = (symbol: string) => {
     dispatch(setSelectedSymbol(symbol));
-    // Navigate to the stock detail screen
-    router.push(`/stock/${symbol}`);
+    // Navigate to the stock detail screen with chart tab
+    router.push(`/stock/${symbol}/chart`);
   };
 
   const renderStockItem = ({ item }: { item: typeof stockList[0] }) => {

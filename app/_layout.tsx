@@ -61,10 +61,7 @@ function RootLayoutNav() {
             <Stack.Screen 
               name="stock/[symbol]" 
               options={{ 
-                title: 'Stock Details',
-                headerShown: true,
-                headerBackTitle: 'Back',
-                presentation: 'card',
+                headerShown: false,
               }} 
             />
             <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
