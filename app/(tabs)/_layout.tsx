@@ -33,12 +33,6 @@ export default function TabLayout() {
           headerShown: false,
         }}
       />
-      <Tabs.Screen
-        name="two"
-        options={{
-          href: null, // Hide the tab
-        }}
-      />
     </Tabs>
   );
 }
