@@ -192,7 +192,6 @@ compass-financial/
 - **Redux Toolkit**: State management with RTK Query for API integration
 - **TradingView Charts**: Professional financial charting library
 - **TypeScript**: Type-safe JavaScript development
-- **React Native Reanimated**: High-performance animations
 - **React Native Gesture Handler**: Advanced touch gesture handling
 - **React Native Safe Area Context**: Safe area insets management
 - **React Native WebView**: Web content rendering for chart widgets
