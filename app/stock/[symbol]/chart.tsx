@@ -147,13 +147,13 @@ export default function ChartTab() {
       {isLoadingEODHD ? (
         <View style={styles.noDataContainer}>
           <ActivityIndicator size="large" color={colors.tint} />
-          <Text style={[styles.noDataText, { color: colors.text + '80'}]}>
+          <Text style={[styles.noDataText, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
             Loading {timeframe} data...
           </Text>
         </View>
       ) : eodhdError ? (
         <View style={styles.noDataContainer}>
-          <Text style={[styles.noDataText, { color: '#F44336' }]}>
+          <Text style={[styles.noDataText, { color: '#F44336', fontWeight: '600' }]}>
             Error loading chart data
           </Text>
         </View>
@@ -170,7 +170,7 @@ export default function ChartTab() {
         </View>
       ) : (
         <View style={styles.noDataContainer}>
-          <Text style={[styles.noDataText, { color: colors.text + '80' }]}>
+          <Text style={[styles.noDataText, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
             Waiting for chart data...
           </Text>
         </View>
@@ -194,8 +194,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   noDataText: {
-    fontSize: 16,
+    fontSize: 15,
+    fontWeight: '500',
     textAlign: 'center',
+    marginTop: 12,
   },
 });
 

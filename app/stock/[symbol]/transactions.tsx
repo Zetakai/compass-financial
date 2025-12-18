@@ -151,24 +151,39 @@ export default function TransactionsTab() {
         style={[
           styles.transactionItem,
           {
-            backgroundColor: colorScheme === 'dark' ? '#1a1a1a' : '#ffffff',
-            borderBottomColor: colors.text + '10',
+            backgroundColor: colorScheme === 'dark' ? '#1E1E1E' : '#FFFFFF',
+            shadowColor: colorScheme === 'dark' ? '#000' : '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: colorScheme === 'dark' ? 0.3 : 0.08,
+            shadowRadius: 3,
+            elevation: 2,
           },
         ]}
       >
         <View style={styles.transactionInfo}>
           <View style={styles.transactionHeader}>
             <View style={styles.transactionLeft}>
-              <Text
+              <View
                 style={[
-                  styles.transactionType,
-                  { color: isBuy ? '#4CAF50' : '#F44336' },
+                  styles.transactionTypeBadge,
+                  {
+                    backgroundColor: isBuy
+                      ? (colorScheme === 'dark' ? 'rgba(76, 175, 80, 0.2)' : 'rgba(76, 175, 80, 0.1)')
+                      : (colorScheme === 'dark' ? 'rgba(244, 67, 54, 0.2)' : 'rgba(244, 67, 54, 0.1)'),
+                  },
                 ]}
               >
-                {isBuy ? 'BUY' : 'SELL'}
-              </Text>
-              <Text style={[styles.transactionVolume, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.8)', marginLeft: 8 }]}>
-                Vol: {item.volume.toLocaleString()}
+                <Text
+                  style={[
+                    styles.transactionType,
+                    { color: isBuy ? '#4CAF50' : '#F44336' },
+                  ]}
+                >
+                  {isBuy ? '↑ BUY' : '↓ SELL'}
+                </Text>
+              </View>
+              <Text style={[styles.transactionVolume, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
+                {item.volume.toLocaleString()}
               </Text>
             </View>
             <Text style={[styles.transactionPrice, { color: colors.text }]}>
@@ -176,7 +191,7 @@ export default function TransactionsTab() {
             </Text>
           </View>
           <View style={styles.transactionDetails}>
-            <Text style={[styles.transactionTime, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
+            <Text style={[styles.transactionTime, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)' }]}>
               {formatTime(item.timestamp)}
             </Text>
           </View>
@@ -194,12 +209,14 @@ export default function TransactionsTab() {
         ListHeaderComponent={
           <View style={[styles.transactionsSection, { backgroundColor: colors.background }]}>
             <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                Recent Transactions
-              </Text>
-              <Text style={[styles.sectionSubtitle, { color: colors.text + '60' }]}>
-                {transactions.length} {transactions.length === 1 ? 'trade' : 'trades'}
-              </Text>
+              <View>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>
+                  Recent Transactions
+                </Text>
+                <Text style={[styles.sectionSubtitle, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
+                  {transactions.length} {transactions.length === 1 ? 'trade' : 'trades'}
+                </Text>
+              </View>
             </View>
 
             {isLoading ? (
@@ -237,33 +254,38 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   transactionsSection: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
     backgroundColor: 'transparent',
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
+    alignItems: 'flex-start',
   },
   sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+    marginBottom: 4,
   },
   sectionSubtitle: {
-    fontSize: 14,
+    fontSize: 15,
+    fontWeight: '500',
   },
   listContent: {
-    paddingBottom: 0,
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    gap: 10,
   },
   transactionsList: {
     gap: 4,
   },
   transactionItem: {
-    padding: 12,
-    borderRadius: 8,
-    borderBottomWidth: 1,
-    marginBottom: 4,
+    padding: 16,
+    borderRadius: 14,
+    marginBottom: 2,
   },
   transactionInfo: {
     flex: 1,
@@ -272,19 +294,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 10,
   },
   transactionLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  transactionTypeBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
   },
   transactionType: {
-    fontSize: 14,
-    fontWeight: 'bold',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   transactionPrice: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: -0.3,
   },
   transactionDetails: {
     flexDirection: 'row',
@@ -292,17 +323,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   transactionVolume: {
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: '500',
   },
   transactionTime: {
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: '500',
   },
   emptyTransactions: {
-    padding: 32,
+    padding: 40,
     alignItems: 'center',
   },
   emptyText: {
-    fontSize: 14,
+    fontSize: 15,
+    fontWeight: '500',
     textAlign: 'center',
   },
 });

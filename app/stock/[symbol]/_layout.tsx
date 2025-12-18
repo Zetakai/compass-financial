@@ -4,6 +4,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Tabs, useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import { TouchableOpacity } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Tab bar icon component similar to main tabs
 function TabBarIcon(props: {
@@ -18,28 +19,42 @@ export default function StockDetailLayout() {
   const colors = Colors[colorScheme ?? 'light'];
   const router = useRouter();
   const { symbol } = useLocalSearchParams<{ symbol: string }>();
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: colorScheme === 'dark' ? '#2f95dc' : '#1976d2',
-        tabBarInactiveTintColor: colorScheme === 'dark' ? '#888' : '#666',
+        tabBarActiveTintColor: colorScheme === 'dark' ? '#0A84FF' : '#007AFF',
+        tabBarInactiveTintColor: colorScheme === 'dark' ? '#8E8E93' : '#8E8E93',
         tabBarStyle: {
           backgroundColor: colors.background,
-          borderTopWidth: 1,
-          borderTopColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+          borderTopWidth: 0,
+          elevation: 8,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: colorScheme === 'dark' ? 0.3 : 0.1,
+          shadowRadius: 8,
+          height: 60 + insets.bottom,
+          paddingBottom: Math.max(insets.bottom, 8),
+          paddingTop: 8,
         },
         tabBarLabelStyle: {
-          fontSize: 16,
-          fontWeight: '500',
+          fontSize: 13,
+          fontWeight: '600',
+          marginTop: 4,
         },
         headerShown: true,
         headerStyle: {
           backgroundColor: colors.background,
+          elevation: 0,
+          shadowOpacity: 0,
+          borderBottomWidth: 0,
         },
-        headerTintColor: colorScheme === 'dark' ? '#fff' : '#000',
+        headerTintColor: colors.text,
         headerTitleStyle: {
-          fontWeight: '600',
+          fontWeight: '700',
+          fontSize: 18,
+          letterSpacing: -0.3,
         },
         headerTitle: symbol || 'Stock',
         headerLeft: () => (

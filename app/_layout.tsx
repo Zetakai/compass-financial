@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-gesture-handler';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Provider } from 'react-redux';
 
 import { useColorScheme } from '@/components/useColorScheme';
@@ -51,20 +52,22 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   return (
-    <Provider store={store}>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen 
-              name="stock/[symbol]" 
-              options={{ 
-                headerShown: false,
-              }} 
-            />
-          </Stack>
-        </ThemeProvider>
-      </GestureHandlerRootView>
-    </Provider>
+    <SafeAreaProvider>
+      <Provider store={store}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen 
+                name="stock/[symbol]" 
+                options={{ 
+                  headerShown: false,
+                }} 
+              />
+            </Stack>
+          </ThemeProvider>
+        </GestureHandlerRootView>
+      </Provider>
+    </SafeAreaProvider>
   );
 }

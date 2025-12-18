@@ -146,16 +146,33 @@ export default function StockListScreen() {
         style={[
           styles.stockItem,
           {
-            backgroundColor: colorScheme === 'dark' ? '#1a1a1a' : '#ffffff',
-            borderBottomColor: colors.text + '10',
+            backgroundColor: colorScheme === 'dark' ? '#1E1E1E' : '#FFFFFF',
+            shadowColor: colorScheme === 'dark' ? '#000' : '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: colorScheme === 'dark' ? 0.3 : 0.1,
+            shadowRadius: 4,
+            elevation: 3,
           },
         ]}
         onPress={() => handleStockPress(item.symbol)}
-        activeOpacity={0.7}
+        activeOpacity={0.8}
       >
         <View style={styles.stockInfo}>
           <View style={styles.stockHeader}>
-            <Text style={[styles.symbol, { color: colors.text }]}>{item.symbol}</Text>
+            <View style={styles.symbolContainer}>
+              <View
+                style={[
+                  styles.symbolBadge,
+                  {
+                    backgroundColor: colorScheme === 'dark' 
+                      ? (isPositive ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)')
+                      : (isPositive ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)'),
+                  },
+                ]}
+              >
+                <Text style={[styles.symbol, { color: colors.text }]}>{item.symbol}</Text>
+              </View>
+            </View>
             {hasData ? (
               <View style={styles.priceContainer}>
                 <Text style={[styles.price, { color: colors.text }]}>
@@ -169,55 +186,55 @@ export default function StockListScreen() {
 
           {hasData && (
             <View style={styles.changeContainer}>
-              <Text
+              <View
                 style={[
-                  styles.changeText,
+                  styles.changeBadge,
                   {
-                    color: isPositive ? '#4CAF50' : '#F44336',
+                    backgroundColor: isPositive
+                      ? (colorScheme === 'dark' ? 'rgba(76, 175, 80, 0.2)' : 'rgba(76, 175, 80, 0.1)')
+                      : (colorScheme === 'dark' ? 'rgba(244, 67, 54, 0.2)' : 'rgba(244, 67, 54, 0.1)'),
                   },
                 ]}
               >
-                {isPositive ? '+' : ''}
-                {item.priceChange.value.toFixed(2)} ({isPositive ? '+' : ''}
-                {item.priceChange.percent.toFixed(2)}%)
-              </Text>
+                <Text
+                  style={[
+                    styles.changeText,
+                    {
+                      color: isPositive ? '#4CAF50' : '#F44336',
+                    },
+                  ]}
+                >
+                  {isPositive ? '↑' : '↓'} {isPositive ? '+' : ''}
+                  {item.priceChange.value.toFixed(2)} ({isPositive ? '+' : ''}
+                  {item.priceChange.percent.toFixed(2)}%)
+                </Text>
+              </View>
               {item.volume > 0 && (
-                <Text style={[styles.volume, { color: colors.text + '60' }]}>
+                <Text style={[styles.volume, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)' }]}>
                   Vol: {item.volume.toLocaleString()}
                 </Text>
               )}
             </View>
           )}
         </View>
-
-        <View
-          style={[
-            styles.indicator,
-            {
-              backgroundColor: hasData
-                ? isPositive
-                  ? '#4CAF50'
-                  : '#F44336'
-                : colors.text + '20',
-            },
-          ]}
-        />
       </TouchableOpacity>
     );
   };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>Stocks</Text>
-        <Text style={[styles.subtitle, { color: colors.text + '80' }]}>
-          {allSymbols.length} {allSymbols.length === 1 ? 'stock' : 'stocks'}
-        </Text>
+      <View style={[styles.header, { backgroundColor: colors.background }]}>
+        <View>
+          <Text style={[styles.title, { color: colors.text }]}>Stocks</Text>
+          <Text style={[styles.subtitle, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
+            {allSymbols.length} {allSymbols.length === 1 ? 'stock' : 'stocks'} tracked
+          </Text>
+        </View>
       </View>
 
       {stockList.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={[styles.emptyText, { color: colors.text + '80' }]}>
+          <Text style={[styles.emptyText, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
             No stocks added yet
           </Text>
         </View>
@@ -239,27 +256,32 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    padding: 20,
+    paddingHorizontal: 20,
     paddingTop: 60,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.1)',
+    paddingBottom: 20,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontSize: 32,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 15,
+    fontWeight: '500',
   },
   listContent: {
-    paddingBottom: 20,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 24,
+    gap: 12,
   },
   stockItem: {
     flexDirection: 'row',
-    padding: 16,
-    borderBottomWidth: 1,
+    padding: 18,
+    borderRadius: 16,
     alignItems: 'center',
+    marginBottom: 4,
   },
   stockInfo: {
     flex: 1,
@@ -268,43 +290,58 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
+  },
+  symbolContainer: {
+    flex: 1,
+  },
+  symbolBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
   symbol: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   priceContainer: {
     alignItems: 'flex-end',
   },
   price: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: -0.3,
   },
   changeContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
+  },
+  changeBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
   },
   changeText: {
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   volume: {
-    fontSize: 12,
-  },
-  indicator: {
-    width: 4,
-    height: 40,
-    borderRadius: 2,
-    marginLeft: 12,
+    fontSize: 13,
+    fontWeight: '500',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 40,
   },
   emptyText: {
     fontSize: 16,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
