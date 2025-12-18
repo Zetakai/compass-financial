@@ -6,36 +6,13 @@
  * Reference: https://www.tradingview.com/widget-docs/widgets/charts/advanced-chart/
  */
 
-import { ChartData } from '@/store/slices/stockDataSlice';
-import { Timeframe } from '@/store/slices/uiSlice';
 import React, { useMemo } from 'react';
 import { StyleSheet, useColorScheme, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 
 interface TradingViewChartProps {
-  data: ChartData[]; // Historical data (not used with widget, but kept for compatibility)
-  realtimeTick?: { timestamp: number; price: number; volume?: number }; // Not used with widget
-  height?: number;
-  timeframe: Timeframe;
-  isPositive?: boolean;
   symbol?: string; // Stock symbol (e.g., 'AAPL')
   symbolName?: string; // Display name (e.g., 'Apple')
-}
-
-// Map our timeframe to TradingView interval
-function getTradingViewInterval(timeframe: Timeframe): string {
-  switch (timeframe) {
-    case '1D':
-      return 'D'; // Daily
-    case '1W':
-      return 'W'; // Weekly
-    case '1M':
-      return 'M'; // Monthly
-    case '1Y':
-      return '12M'; // 12 months
-    default:
-      return 'D';
-  }
 }
 
 // Format symbol for TradingView (e.g., 'AAPL' -> 'NASDAQ:AAPL')
@@ -46,11 +23,6 @@ function formatSymbolForTradingView(symbol: string): string {
 }
 
 export default function TradingViewChart({
-  data,
-  realtimeTick,
-  height = 300,
-  timeframe,
-  isPositive = true,
   symbol = 'AAPL',
   symbolName,
 }: TradingViewChartProps) {
@@ -58,9 +30,10 @@ export default function TradingViewChart({
   const isDark = colorScheme === 'dark';
 
   // Generate HTML with TradingView Advanced Chart widget
+  // TradingView widget fetches its own historical and real-time data
+  // Users can change timeframe via the widget's built-in toolbar
   const htmlContent = useMemo(() => {
     const tradingViewSymbol = formatSymbolForTradingView(symbol);
-    const interval = getTradingViewInterval(timeframe);
     const displayName = symbolName || symbol;
     const backgroundColor = isDark ? '#0F0F0F' : '#FFFFFF';
     const gridColor = isDark ? 'rgba(242, 242, 242, 0.06)' : 'rgba(0, 0, 0, 0.06)';
@@ -117,7 +90,6 @@ export default function TradingViewChart({
       "hide_legend": false,
       "hide_volume": false,
       "hotlist": false,
-      "interval": "${interval}",
       "locale": "en",
       "save_image": true,
       "style": "1",
@@ -137,7 +109,7 @@ export default function TradingViewChart({
 </body>
 </html>
     `;
-  }, [symbol, symbolName, timeframe, isDark, height]);
+  }, [symbol, symbolName, isDark]);
 
   return (
     <View style={styles.container}>

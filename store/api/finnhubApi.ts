@@ -73,7 +73,7 @@ export const finnhubApi = createApi({
   baseQuery: fetchBaseQuery({
     baseUrl: 'https://finnhub.io/api/v1',
   }),
-  tagTypes: ['HistoricalData', 'Quote'],
+  tagTypes: ['HistoricalData', 'Quote', 'CompanyProfile'],
   endpoints: (builder) => ({
     /**
      * Fetch historical candle data
@@ -139,7 +139,15 @@ export const finnhubApi = createApi({
      * Useful for initial load or when WebSocket is disconnected
      */
     getCurrentQuote: builder.query<
-      { price: number; change: number; percentChange: number },
+      { 
+        price: number; 
+        change: number; 
+        percentChange: number;
+        high: number; // High price of the day
+        low: number; // Low price of the day
+        open: number; // Open price of the day
+        previousClose: number; // Previous close price
+      },
       string
     >({
       query: (symbol) => ({
@@ -158,6 +166,10 @@ export const finnhubApi = createApi({
           price: response.c, // Current price
           change: response.d, // Change
           percentChange: response.dp, // Percent change
+          high: response.h || 0, // High price of the day
+          low: response.l || 0, // Low price of the day
+          open: response.o || 0, // Open price of the day
+          previousClose: response.pc || 0, // Previous close price
         };
       },
       // Cache for 30 seconds (quotes change frequently)
@@ -166,9 +178,62 @@ export const finnhubApi = createApi({
         { type: 'Quote', id: symbol },
       ],
     }),
+
+    /**
+     * Get company profile (includes market cap, logo, description, sector, industry)
+     */
+    getCompanyProfile: builder.query<
+      { 
+        marketCap: number; 
+        name: string; 
+        exchange: string; 
+        currency: string; 
+        logo: string;
+        industry?: string;
+        website?: string;
+        phone?: string;
+        country?: string;
+      },
+      string
+    >({
+      query: (symbol) => ({
+        url: '/stock/profile2',
+        params: {
+          symbol,
+          token: FINNHUB_API_KEY,
+        },
+      }),
+      transformResponse: (response: any) => {
+        // Finnhub returns marketCapitalization in millions, convert to raw value
+        const marketCapRaw = response.marketCapitalization || 0;
+        const marketCap = marketCapRaw * 1e6; // Convert millions to raw value
+        
+        return {
+          marketCap,
+          name: response.name || '',
+          exchange: response.exchange || '',
+          currency: response.currency || 'USD',
+          logo: response.logo || '',
+          // Only include fields that actually exist in the API response
+          industry: response.finnhubIndustry || '',
+          website: response.weburl || '',
+          phone: response.phone || '',
+          country: response.country || '',
+        };
+      },
+      // Cache for 1 hour (company profile doesn't change often)
+      keepUnusedDataFor: 3600,
+      providesTags: (result, error, symbol) => [
+        { type: 'CompanyProfile', id: symbol },
+      ],
+    }),
   }),
 });
 
 // Export hooks for usage in functional components
-export const { useGetHistoricalDataQuery, useGetCurrentQuoteQuery } = finnhubApi;
+export const { 
+  useGetHistoricalDataQuery, 
+  useGetCurrentQuoteQuery,
+  useGetCompanyProfileQuery 
+} = finnhubApi;
 

@@ -82,9 +82,9 @@ export default function StockDetailLayout() {
       <Tabs.Screen
         name="transactions"
         options={{
-          title: 'Transactions',
-          tabBarLabel: 'Transactions',
-          tabBarIcon: ({ color }) => <TabBarIcon name="exchange" color={color} />,
+          title: 'Overview',
+          tabBarLabel: 'Overview',
+          tabBarIcon: ({ color }) => <TabBarIcon name="info-circle" color={color} />,
         }}
       />
     </Tabs>

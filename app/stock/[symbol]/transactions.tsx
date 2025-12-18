@@ -1,42 +1,77 @@
 import { useColorScheme } from '@/components/useColorScheme';
 import { DEFAULT_SYMBOLS, FINNHUB_API_KEY } from '@/config/api';
 import Colors from '@/constants/Colors';
+import { useGetCompanyProfileQuery, useGetCurrentQuoteQuery, useGetHistoricalDataQuery } from '@/store/api/finnhubApi';
 import { useAppDispatch } from '@/store/hooks';
 import { setSelectedSymbol } from '@/store/slices/uiSlice';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import { formatMarketCap } from '@/utils/formatUtils';
+import { useFocusEffect, useGlobalSearchParams, useLocalSearchParams, useNavigation } from 'expo-router';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
+  ScrollView,
   StyleSheet,
   Text,
-  View,
+  View
 } from 'react-native';
 
-// Transaction interface
-interface Transaction {
-  id: string;
-  timestamp: number;
-  price: number;
-  volume: number;
-  type: 'buy' | 'sell';
-}
-
-export default function TransactionsTab() {
-  const { symbol } = useLocalSearchParams<{ symbol: string }>();
+export default function OverviewTab() {
+  // Use global search params - nested tabs should get params from parent route
+  const globalParams = useGlobalSearchParams<{ symbol?: string }>();
+  const localParams = useLocalSearchParams<{ symbol?: string }>();
+  
   const colorScheme = useColorScheme();
   const dispatch = useAppDispatch();
   const colors = Colors[colorScheme ?? 'light'];
 
-  const stockSymbol = symbol || DEFAULT_SYMBOLS[0];
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Get symbol from global params first (works for nested routes), then local
+  const symbol = globalParams.symbol || localParams.symbol;
+  // Ensure symbol is a string (expo-router can return arrays)
+  const stockSymbol = (Array.isArray(symbol) ? symbol[0] : symbol) || DEFAULT_SYMBOLS[0];
 
   const navigation = useNavigation();
 
+  // Fetch company profile and quote
+  // Force refetch when symbol changes by using refetchOnMountOrArgChange
+  const { data: companyProfile, isLoading: isLoadingProfile, refetch: refetchProfile } = useGetCompanyProfileQuery(stockSymbol, {
+    skip: !stockSymbol || !FINNHUB_API_KEY,
+    refetchOnMountOrArgChange: true, // Force refetch when symbol changes
+  });
+
+  const { data: currentQuote, refetch: refetchQuote } = useGetCurrentQuoteQuery(stockSymbol, {
+    skip: !stockSymbol || !FINNHUB_API_KEY,
+    refetchOnMountOrArgChange: true, // Force refetch when symbol changes
+  });
+
+  // Fetch 1 year of historical data for 52W high/low and ROI calculation
+  const { data: historicalData1Y, refetch: refetchHistorical } = useGetHistoricalDataQuery(
+    { symbol: stockSymbol, timeframe: '1Y' },
+    { 
+      skip: !stockSymbol || !FINNHUB_API_KEY,
+      refetchOnMountOrArgChange: true, // Force refetch when symbol changes
+    }
+  );
+
+  // Refetch all data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (stockSymbol && FINNHUB_API_KEY) {
+        refetchProfile();
+        refetchQuote();
+        refetchHistorical();
+      }
+    }, [stockSymbol, refetchProfile, refetchQuote, refetchHistorical])
+  );
+
+  // Also refetch when symbol changes (in case focus effect doesn't catch it)
   useEffect(() => {
+    if (stockSymbol && FINNHUB_API_KEY) {
+      refetchProfile();
+      refetchQuote();
+      refetchHistorical();
+    }
     dispatch(setSelectedSymbol(stockSymbol));
-  }, [stockSymbol, dispatch]);
+  }, [stockSymbol, refetchProfile, refetchQuote, refetchHistorical, dispatch]);
 
   useEffect(() => {
     navigation.setOptions({
@@ -46,206 +81,220 @@ export default function TransactionsTab() {
     });
   }, [stockSymbol, navigation]);
 
-  // Fetch transaction data from REST API
-  useEffect(() => {
-    const fetchTransactions = async () => {
-      if (!stockSymbol || !FINNHUB_API_KEY) {
-        setIsLoading(false);
-        return;
-      }
+  // Calculate 52W high/low and ROI
+  const performanceMetrics = useMemo(() => {
+    if (!historicalData1Y || historicalData1Y.length === 0 || !currentQuote) {
+      return null;
+    }
 
-      setIsLoading(true);
-      try {
-        // Use Finnhub's tick data endpoint to get recent trades
-        // Note: Free tier may have limitations, so we'll also generate mock data
-        const response = await fetch(
-          `https://finnhub.io/api/v1/stock/tick?symbol=${stockSymbol}&token=${FINNHUB_API_KEY}&limit=50`
-        );
+    const highs = historicalData1Y.map((d) => d.high || d.value);
+    const lows = historicalData1Y.map((d) => d.low || d.value);
+    const week52High = Math.max(...highs);
+    const week52Low = Math.min(...lows);
+    const currentPrice = currentQuote.price;
 
-        if (response.ok) {
-          const data = await response.json();
-          
-          if (data.data && Array.isArray(data.data) && data.data.length > 0) {
-            // Convert Finnhub tick data to transactions
-            const tickTransactions: Transaction[] = data.data.map((tick: any, index: number) => ({
-              id: `tick-${tick.t}-${index}`,
-              timestamp: tick.t * 1000, // Convert to milliseconds
-              price: tick.p,
-              volume: tick.v || 0,
-              type: tick.p > (data.data[index - 1]?.p || tick.p) ? 'buy' : 'sell',
-            }));
-            setTransactions(tickTransactions);
-          } else {
-            // Generate mock transactions based on current price
-            generateMockTransactions();
-          }
-        } else {
-          // Generate mock transactions if API fails
-          generateMockTransactions();
-        }
-      } catch (error) {
-        console.error('Error fetching transactions:', error);
-        // Generate mock transactions on error
-        generateMockTransactions();
-      } finally {
-        setIsLoading(false);
-      }
+    // Calculate ROI from 1 year ago (first data point)
+    const price1YearAgo = historicalData1Y[0]?.value || currentPrice;
+    const roi = price1YearAgo > 0 ? ((currentPrice - price1YearAgo) / price1YearAgo) * 100 : 0;
+
+    // Calculate % from 52W high
+    const percentFrom52WHigh = week52High > 0 ? ((currentPrice - week52High) / week52High) * 100 : 0;
+
+    return {
+      week52High,
+      week52Low,
+      roi,
+      percentFrom52WHigh,
     };
+  }, [historicalData1Y, currentQuote]);
 
-    // Generate mock transaction data (simulated trades)
-    const generateMockTransactions = async () => {
-      try {
-        // Get current quote to base mock data on
-        const quoteResponse = await fetch(
-          `https://finnhub.io/api/v1/quote?symbol=${stockSymbol}&token=${FINNHUB_API_KEY}`
-        );
-        
-        let basePrice = 150; // Default price
-        if (quoteResponse.ok) {
-          const quoteData = await quoteResponse.json();
-          basePrice = quoteData.c || basePrice;
-        }
+  const borderColor = colorScheme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+  const cardBackground = colorScheme === 'dark' ? '#1A1A1A' : '#F5F5F5';
 
-        // Generate 20 mock transactions
-        const mockTransactions: Transaction[] = [];
-        const now = Date.now();
-        
-        for (let i = 0; i < 20; i++) {
-          const priceVariation = (Math.random() - 0.5) * basePrice * 0.02; // ±2% variation
-          const price = basePrice + priceVariation;
-          const volume = Math.floor(Math.random() * 10000) + 100;
-          const timestamp = now - (i * 60000); // 1 minute apart
-          
-          mockTransactions.push({
-            id: `mock-${timestamp}-${i}`,
-            timestamp,
-            price: Math.round(price * 100) / 100,
-            volume,
-            type: Math.random() > 0.5 ? 'buy' : 'sell',
-          });
-        }
-        
-        setTransactions(mockTransactions);
-      } catch (error) {
-        console.error('Error generating mock transactions:', error);
-        setTransactions([]);
-      }
-    };
+  return (
+    <ScrollView 
+      style={[styles.container, { backgroundColor: colors.background }]}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Key Stats */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Key Stats</Text>
+        <View style={[styles.card, { backgroundColor: cardBackground }]}>
+          {isLoadingProfile ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={colors.tint} />
+            </View>
+          ) : (
+            <>
+              {companyProfile && companyProfile.marketCap > 0 && (
+                <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+                  <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Market Cap</Text>
+                  <Text style={[styles.statValue, { color: colors.text }]}>
+                    {formatMarketCap(companyProfile.marketCap)}
+                  </Text>
+                </View>
+              )}
+              
+              {companyProfile?.industry && (
+                <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+                  <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Industry</Text>
+                  <Text style={[styles.statValue, { color: colors.text }]}>
+                    {companyProfile.industry}
+                  </Text>
+                </View>
+              )}
+              
+              {companyProfile?.exchange && (
+                <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+                  <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Exchange</Text>
+                  <Text style={[styles.statValue, { color: colors.text }]}>
+                    {companyProfile.exchange}
+                  </Text>
+                </View>
+              )}
+              
+              {companyProfile?.currency && (
+                <View style={[styles.statRow, { borderBottomWidth: 0 }]}>
+                  <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Currency</Text>
+                  <Text style={[styles.statValue, { color: colors.text }]}>
+                    {companyProfile.currency}
+                  </Text>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      </View>
 
-    fetchTransactions();
-  }, [stockSymbol]);
-
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
-
-  const renderTransaction = ({ item }: { item: Transaction }) => {
-    const isBuy = item.type === 'buy';
-    return (
-      <View
-        style={[
-          styles.transactionItem,
-          {
-            backgroundColor: colorScheme === 'dark' ? '#1E1E1E' : '#FFFFFF',
-            shadowColor: colorScheme === 'dark' ? '#000' : '#000',
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: colorScheme === 'dark' ? 0.3 : 0.08,
-            shadowRadius: 3,
-            elevation: 2,
-          },
-        ]}
-      >
-        <View style={styles.transactionInfo}>
-          <View style={styles.transactionHeader}>
-            <View style={styles.transactionLeft}>
-              <View
+      {/* Performance */}
+      {performanceMetrics && currentQuote && (
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Performance</Text>
+          <View style={[styles.card, { backgroundColor: cardBackground }]}>
+            <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+              <Text style={[styles.statLabel, { color: colors.text + '80' }]}>1Y ROI</Text>
+              <Text
                 style={[
-                  styles.transactionTypeBadge,
+                  styles.statValue,
                   {
-                    backgroundColor: isBuy
-                      ? (colorScheme === 'dark' ? 'rgba(76, 175, 80, 0.2)' : 'rgba(76, 175, 80, 0.1)')
-                      : (colorScheme === 'dark' ? 'rgba(244, 67, 54, 0.2)' : 'rgba(244, 67, 54, 0.1)'),
+                    color: performanceMetrics.roi >= 0 ? '#4CAF50' : '#F44336',
                   },
                 ]}
               >
-                <Text
-                  style={[
-                    styles.transactionType,
-                    { color: isBuy ? '#4CAF50' : '#F44336' },
-                  ]}
-                >
-                  {isBuy ? '↑ BUY' : '↓ SELL'}
-                </Text>
-              </View>
-              <Text style={[styles.transactionVolume, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
-                {item.volume.toLocaleString()}
+                {performanceMetrics.roi >= 0 ? '+' : ''}
+                {performanceMetrics.roi.toFixed(2)}%
               </Text>
             </View>
-            <Text style={[styles.transactionPrice, { color: colors.text }]}>
-              ${item.price.toFixed(2)}
-            </Text>
-          </View>
-          <View style={styles.transactionDetails}>
-            <Text style={[styles.transactionTime, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)' }]}>
-              {formatTime(item.timestamp)}
-            </Text>
+            
+            <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+              <Text style={[styles.statLabel, { color: colors.text + '80' }]}>% from 52W High</Text>
+              <Text
+                style={[
+                  styles.statValue,
+                  {
+                    color: performanceMetrics.percentFrom52WHigh >= 0 ? '#F44336' : '#4CAF50',
+                  },
+                ]}
+              >
+                {performanceMetrics.percentFrom52WHigh.toFixed(2)}%
+              </Text>
+            </View>
+            
+            <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+              <Text style={[styles.statLabel, { color: colors.text + '80' }]}>52W High</Text>
+              <Text style={[styles.statValue, { color: colors.text }]}>
+                ${performanceMetrics.week52High.toFixed(2)}
+              </Text>
+            </View>
+            
+            <View style={[styles.statRow, { borderBottomWidth: 0 }]}>
+              <Text style={[styles.statLabel, { color: colors.text + '80' }]}>52W Low</Text>
+              <Text style={[styles.statValue, { color: colors.text }]}>
+                ${performanceMetrics.week52Low.toFixed(2)}
+              </Text>
+            </View>
           </View>
         </View>
-      </View>
-    );
-  };
+      )}
 
-  return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <FlatList
-        data={isLoading || transactions.length === 0 ? [] : transactions}
-        renderItem={renderTransaction}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={
-          <View style={[styles.transactionsSection, { backgroundColor: colors.background }]}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                  Recent Transactions
-                </Text>
-                <Text style={[styles.sectionSubtitle, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)' }]}>
-                  {transactions.length} {transactions.length === 1 ? 'trade' : 'trades'}
-                </Text>
-              </View>
+      {/* Trading Information */}
+      {currentQuote && (
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Trading Information</Text>
+          <View style={[styles.card, { backgroundColor: cardBackground }]}>
+            <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+              <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Current Price</Text>
+              <Text style={[styles.statValue, { color: colors.text }]}>
+                ${currentQuote.price.toFixed(2)}
+              </Text>
             </View>
-
-            {isLoading ? (
-              <View style={styles.emptyTransactions}>
-                <ActivityIndicator size="large" color={colors.tint} />
-                <Text
-                  style={[
-                    styles.emptyText,
-                    { color: colors.text + '60', marginTop: 12 },
-                  ]}
-                >
-                  Loading transactions...
+            
+            <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+              <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Change</Text>
+              <Text
+                style={[
+                  styles.statValue,
+                  {
+                    color: currentQuote.percentChange >= 0 ? '#4CAF50' : '#F44336',
+                  },
+                ]}
+              >
+                {currentQuote.change >= 0 ? '+' : ''}
+                {currentQuote.change.toFixed(2)} ({currentQuote.percentChange >= 0 ? '+' : ''}
+                {currentQuote.percentChange.toFixed(2)}%)
+              </Text>
+            </View>
+            
+            {currentQuote.open > 0 && (
+              <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+                <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Open</Text>
+                <Text style={[styles.statValue, { color: colors.text }]}>
+                  ${currentQuote.open.toFixed(2)}
                 </Text>
               </View>
-            ) : transactions.length === 0 ? (
-              <View style={styles.emptyTransactions}>
-                <Text style={[styles.emptyText, { color: colors.text + '60' }]}>
-                  No transaction data available.
+            )}
+            
+            {currentQuote.high > 0 && (
+              <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+                <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Day High</Text>
+                <Text style={[styles.statValue, { color: colors.text }]}>
+                  ${currentQuote.high.toFixed(2)}
                 </Text>
               </View>
-            ) : null}
+            )}
+            
+            {currentQuote.low > 0 && (
+              <View style={[styles.statRow, { borderBottomColor: borderColor }]}>
+                <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Day Low</Text>
+                <Text style={[styles.statValue, { color: colors.text }]}>
+                  ${currentQuote.low.toFixed(2)}
+                </Text>
+              </View>
+            )}
+            
+            {currentQuote.previousClose > 0 && (
+              <View style={[styles.statRow, { borderBottomWidth: 0 }]}>
+                <Text style={[styles.statLabel, { color: colors.text + '80' }]}>Previous Close</Text>
+                <Text style={[styles.statValue, { color: colors.text }]}>
+                  ${currentQuote.previousClose.toFixed(2)}
+                </Text>
+              </View>
+            )}
           </View>
-        }
-        contentContainerStyle={styles.listContent}
-        stickyHeaderIndices={[0]}
-        showsVerticalScrollIndicator={false}
-        style={{ flex: 1 }}
-      />
-    </View>
+        </View>
+      )}
+
+      {/* Loading State */}
+      {isLoadingProfile && !companyProfile && (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.tint} />
+          <Text style={[styles.loadingText, { color: colors.text + '80' }]}>
+            Loading company overview...
+          </Text>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
@@ -253,91 +302,50 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  transactionsSection: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 16,
-    backgroundColor: 'transparent',
+  content: {
+    padding: 20,
+    paddingBottom: 40,
   },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+  section: {
+    marginBottom: 32,
   },
   sectionTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '700',
     letterSpacing: -0.5,
-    marginBottom: 4,
+    marginBottom: 16,
   },
-  sectionSubtitle: {
+  card: {
+    borderRadius: 16,
+    padding: 20,
+    gap: 0,
+  },
+  statRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+  },
+  statLabel: {
     fontSize: 15,
     fontWeight: '500',
   },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
-    gap: 10,
-  },
-  transactionsList: {
-    gap: 4,
-  },
-  transactionItem: {
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 2,
-  },
-  transactionInfo: {
+  statValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    textAlign: 'right',
     flex: 1,
+    marginLeft: 16,
   },
-  transactionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  transactionLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-  },
-  transactionTypeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-  },
-  transactionType: {
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  transactionPrice: {
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  transactionDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  transactionVolume: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  transactionTime: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  emptyTransactions: {
+  loadingContainer: {
     padding: 40,
     alignItems: 'center',
   },
-  emptyText: {
+  loadingText: {
     fontSize: 15,
     fontWeight: '500',
+    marginTop: 12,
     textAlign: 'center',
   },
 });
-

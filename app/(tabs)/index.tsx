@@ -1,11 +1,14 @@
+import MiniChart from '@/components/MiniChart';
 import { useColorScheme } from '@/components/useColorScheme';
-import { DEFAULT_SYMBOLS, EODHD_API_KEY } from '@/config/api';
+import { DEFAULT_SYMBOLS, EODHD_API_KEY, FINNHUB_API_KEY } from '@/config/api';
 import Colors from '@/constants/Colors';
+import { useGetCompanyProfileQuery, useGetCurrentQuoteQuery } from '@/store/api/finnhubApi';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { setHistoricalData } from '@/store/slices/stockDataSlice';
 import { setSelectedSymbol } from '@/store/slices/uiSlice';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useMemo } from 'react';
+import { formatMarketCap } from '@/utils/formatUtils';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -30,74 +33,189 @@ export default function StockListScreen() {
 
   const allSymbols = [...DEFAULT_SYMBOLS, ...customSymbols];
 
+  // Stock Item Component (needs to be outside to use hooks properly)
+  const StockItem = ({ item }: { item: typeof stockList[0] }) => {
+    const itemColorScheme = useColorScheme();
+    const itemColors = Colors[itemColorScheme ?? 'light'];
+    const isPositive = item.priceChange.value >= 0;
+    const hasData = item.hasData;
+    
+    // Get historical data for mini chart
+    // Use daily data (already loaded) - shows last 7-10 days trend
+    const chartData = useMemo(() => {
+      const dailyData = historicalChartData[item.symbol]?.['1D'] || [];
+      if (dailyData.length > 0) {
+        // Get last 7-10 days for mini chart to show recent trend
+        return dailyData.slice(-10);
+      }
+      return [];
+    }, [historicalChartData, item.symbol]);
+    
+    // Fetch company profile and quote for this stock
+    const { data: companyProfile } = useGetCompanyProfileQuery(item.symbol, {
+      skip: !item.symbol || !FINNHUB_API_KEY,
+    });
+    
+    const { data: quote } = useGetCurrentQuoteQuery(item.symbol, {
+      skip: !item.symbol || !FINNHUB_API_KEY,
+    });
+
+    const marketCap = companyProfile?.marketCap ? formatMarketCap(companyProfile.marketCap) : 'N/A';
+    const change24h = quote ? quote.percentChange : null;
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.stockItem,
+          {
+            backgroundColor: itemColorScheme === 'dark' ? '#1E1E1E' : '#FFFFFF',
+            shadowColor: itemColorScheme === 'dark' ? '#000' : '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: itemColorScheme === 'dark' ? 0.3 : 0.1,
+            shadowRadius: 4,
+            elevation: 3,
+          },
+        ]}
+        onPress={() => handleStockPress(item.symbol)}
+        activeOpacity={0.8}
+      >
+        <View style={styles.stockInfo}>
+          <View style={styles.stockHeader}>
+            <View style={styles.symbolContainer}>
+              <View
+                style={[
+                  styles.symbolBadge,
+                  {
+                    backgroundColor: itemColorScheme === 'dark' 
+                      ? (isPositive ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)')
+                      : (isPositive ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)'),
+                  },
+                ]}
+              >
+                <Text style={[styles.symbol, { color: itemColors.text }]}>{item.symbol}</Text>
+              </View>
+            </View>
+            {hasData ? (
+              <View style={styles.priceContainer}>
+                <Text style={[styles.price, { color: itemColors.text }]}>
+                  ${item.currentPrice.toFixed(2)}
+                </Text>
+              </View>
+            ) : (
+              <ActivityIndicator size="small" color={itemColors.tint} />
+            )}
+          </View>
+
+          {hasData && (
+            <View style={styles.metadataContainer}>
+              <View style={styles.metadataRow}>
+                <View style={styles.metadataItem}>
+                  <Text style={[styles.metadataLabel, { color: itemColors.text + '80' }]}>Market Cap</Text>
+                  <Text style={[styles.metadataValue, { color: itemColors.text }]}>{marketCap}</Text>
+                </View>
+                {change24h !== null && (
+                  <View style={styles.metadataItem}>
+                    <Text style={[styles.metadataLabel, { color: itemColors.text + '80' }]}>24h</Text>
+                    <Text
+                      style={[
+                        styles.metadataValue,
+                        {
+                          color: change24h >= 0 ? '#4CAF50' : '#F44336',
+                        },
+                      ]}
+                    >
+                      {change24h >= 0 ? '+' : ''}
+                      {change24h.toFixed(2)}%
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
+        </View>
+        <View style={styles.miniChartWrapper}>
+          <MiniChart symbol={item.symbol} data={chartData} />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   // Load all symbols in parallel using REST API (much faster than sequential!)
-  useEffect(() => {
+  const loadAllSymbols = useCallback(async () => {
     if (!EODHD_API_KEY || allSymbols.length === 0) return;
 
-    const loadAllSymbols = async () => {
-      // Filter out symbols that already have data
-      const symbolsToLoad = allSymbols.filter(
-        (symbol) => !historicalChartData[symbol]?.['1D']?.length
-      );
+    // Filter out symbols that already have data
+    const symbolsToLoad = allSymbols.filter(
+      (symbol) => !historicalChartData[symbol]?.['1D']?.length
+    );
 
-      if (symbolsToLoad.length === 0) return;
+    if (symbolsToLoad.length === 0) return;
 
-      // Load all symbols in parallel
-      const promises = symbolsToLoad.map(async (symbol) => {
-        try {
-          const response = await fetch(
-            `https://eodhd.com/api/eod/${symbol}.US?api_token=${EODHD_API_KEY}&from=${new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}&to=${new Date().toISOString().split('T')[0]}&period=d&fmt=json`
-          );
+    // Load all symbols in parallel
+    const promises = symbolsToLoad.map(async (symbol) => {
+      try {
+        const response = await fetch(
+          `https://eodhd.com/api/eod/${symbol}.US?api_token=${EODHD_API_KEY}&from=${new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}&to=${new Date().toISOString().split('T')[0]}&period=d&fmt=json`
+        );
 
-          if (!response.ok) {
-            console.warn(`Failed to load ${symbol}: ${response.status}`);
-            return null;
-          }
-
-          const data = await response.json();
-
-          if (Array.isArray(data) && data.length > 0) {
-            // EODHD returns data in reverse chronological order (newest first), so we need to reverse it
-            const chartData = data
-              .map((item: any) => ({
-                timestamp: new Date(item.date).getTime(),
-                value: item.close || item.adjusted_close,
-                open: item.open,
-                high: item.high,
-                low: item.low,
-                close: item.close || item.adjusted_close,
-                volume: item.volume || 0,
-              }))
-              .reverse(); // Reverse to get chronological order (oldest first)
-
-            return { symbol, data: chartData };
-          }
-          return null;
-        } catch (error) {
-          console.error(`Error loading ${symbol}:`, error);
+        if (!response.ok) {
+          console.warn(`Failed to load ${symbol}: ${response.status}`);
           return null;
         }
-      });
 
-      // Wait for all requests to complete
-      const results = await Promise.all(promises);
+        const data = await response.json();
 
-      // Dispatch all results at once
-      results.forEach((result) => {
-        if (result) {
-          dispatch(
-            setHistoricalData({
-              symbol: result.symbol,
-              timeframe: '1D',
-              data: result.data,
-            })
-          );
+        if (Array.isArray(data) && data.length > 0) {
+          // EODHD returns data in reverse chronological order (newest first), so we need to reverse it
+          const chartData = data
+            .map((item: any) => ({
+              timestamp: new Date(item.date).getTime(),
+              value: item.close || item.adjusted_close,
+              open: item.open,
+              high: item.high,
+              low: item.low,
+              close: item.close || item.adjusted_close,
+              volume: item.volume || 0,
+            }))
+            .reverse(); // Reverse to get chronological order (oldest first)
+
+          return { symbol, data: chartData };
         }
-      });
-    };
+        return null;
+      } catch (error) {
+        console.error(`Error loading ${symbol}:`, error);
+        return null;
+      }
+    });
 
-    loadAllSymbols();
+    // Wait for all requests to complete
+    const results = await Promise.all(promises);
+
+    // Dispatch all results at once
+    results.forEach((result) => {
+      if (result) {
+        dispatch(
+          setHistoricalData({
+            symbol: result.symbol,
+            timeframe: '1D',
+            data: result.data,
+          })
+        );
+      }
+    });
   }, [allSymbols.join(','), EODHD_API_KEY, dispatch, historicalChartData]);
+
+  // // Load data on mount
+  // useEffect(() => {
+  //   loadAllSymbols();
+  // }, [loadAllSymbols]);
+
+  // Refresh data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadAllSymbols();
+    }, [loadAllSymbols])
+  );
 
   // Calculate price changes for each symbol
   const stockList = useMemo(() => {
@@ -138,87 +256,7 @@ export default function StockListScreen() {
   };
 
   const renderStockItem = ({ item }: { item: typeof stockList[0] }) => {
-    const isPositive = item.priceChange.value >= 0;
-    const hasData = item.hasData;
-
-    return (
-      <TouchableOpacity
-        style={[
-          styles.stockItem,
-          {
-            backgroundColor: colorScheme === 'dark' ? '#1E1E1E' : '#FFFFFF',
-            shadowColor: colorScheme === 'dark' ? '#000' : '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: colorScheme === 'dark' ? 0.3 : 0.1,
-            shadowRadius: 4,
-            elevation: 3,
-          },
-        ]}
-        onPress={() => handleStockPress(item.symbol)}
-        activeOpacity={0.8}
-      >
-        <View style={styles.stockInfo}>
-          <View style={styles.stockHeader}>
-            <View style={styles.symbolContainer}>
-              <View
-                style={[
-                  styles.symbolBadge,
-                  {
-                    backgroundColor: colorScheme === 'dark' 
-                      ? (isPositive ? 'rgba(76, 175, 80, 0.15)' : 'rgba(244, 67, 54, 0.15)')
-                      : (isPositive ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)'),
-                  },
-                ]}
-              >
-                <Text style={[styles.symbol, { color: colors.text }]}>{item.symbol}</Text>
-              </View>
-            </View>
-            {hasData ? (
-              <View style={styles.priceContainer}>
-                <Text style={[styles.price, { color: colors.text }]}>
-                  ${item.currentPrice.toFixed(2)}
-                </Text>
-              </View>
-            ) : (
-              <ActivityIndicator size="small" color={colors.tint} />
-            )}
-          </View>
-
-          {hasData && (
-            <View style={styles.changeContainer}>
-              <View
-                style={[
-                  styles.changeBadge,
-                  {
-                    backgroundColor: isPositive
-                      ? (colorScheme === 'dark' ? 'rgba(76, 175, 80, 0.2)' : 'rgba(76, 175, 80, 0.1)')
-                      : (colorScheme === 'dark' ? 'rgba(244, 67, 54, 0.2)' : 'rgba(244, 67, 54, 0.1)'),
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.changeText,
-                    {
-                      color: isPositive ? '#4CAF50' : '#F44336',
-                    },
-                  ]}
-                >
-                  {isPositive ? '↑' : '↓'} {isPositive ? '+' : ''}
-                  {item.priceChange.value.toFixed(2)} ({isPositive ? '+' : ''}
-                  {item.priceChange.percent.toFixed(2)}%)
-                </Text>
-              </View>
-              {item.volume > 0 && (
-                <Text style={[styles.volume, { color: colorScheme === 'dark' ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)' }]}>
-                  Vol: {item.volume.toLocaleString()}
-                </Text>
-              )}
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
-    );
+    return <StockItem item={item} />;
   };
 
   return (
@@ -314,24 +352,26 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.3,
   },
-  changeContainer: {
+  metadataContainer: {
+    marginTop: 8,
+  },
+  metadataRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
+    gap: 20,
   },
-  changeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
+  metadataItem: {
+    gap: 4,
   },
-  changeText: {
-    fontSize: 14,
+  metadataLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  metadataValue: {
+    fontSize: 13,
     fontWeight: '600',
   },
-  volume: {
-    fontSize: 13,
-    fontWeight: '500',
+  miniChartWrapper: {
+    marginLeft: 12,
   },
   emptyContainer: {
     flex: 1,
