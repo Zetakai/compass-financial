@@ -19,9 +19,6 @@
     "production": {
       "android": {
         "buildType": "apk"
-      },
-      "ios": {
-        "bundleIdentifier": "com.compassfinancial.app"
       }
     }
   },
